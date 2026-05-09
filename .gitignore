@@ -1,0 +1,109 @@
+# =========================
+# Build directories
+# =========================
+build/
+cmake-build-*/
+out/
+bin/
+lib/
+
+# =========================
+# CMake
+# =========================
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# =========================
+# Generated files
+# =========================
+*.generated.*
+*.gen.*
+*.tmp
+*.log
+
+# =========================
+# Object / binary files
+# =========================
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# =========================
+# Debug symbols
+# =========================
+*.dSYM/
+*.pdb
+*.ilk
+
+# =========================
+# Coverage
+# =========================
+*.gcda
+*.gcno
+*.gcov
+coverage/
+htmlcov/
+
+# =========================
+# Profiling
+# =========================
+*.profraw
+*.profdata
+
+# =========================
+# IDE / editors
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# =========================
+# macOS
+# =========================
+.DS_Store
+
+# =========================
+# Linux
+# =========================
+*.core
+
+# =========================
+# Windows
+# =========================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# =========================
+# Database runtime files
+# =========================
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+data/
+storage/
+wal/
+logs/
+
+# =========================
+# Test artifacts
+# =========================
+test_data/
+tmp/
