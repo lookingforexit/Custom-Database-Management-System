@@ -98,7 +98,6 @@ Desktop.ini
 *.sqlite3
 
 data/
-storage/
 wal/
 logs/
 
