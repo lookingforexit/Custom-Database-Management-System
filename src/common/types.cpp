@@ -3,24 +3,24 @@
 // this file implements shared value typing and string conversion helpers.
 namespace dbms::common {
 
-  ValueType GetValueType(const Value &value) {
-    if (std::holds_alternative<std::monostate>(value)) {
-      return ValueType::kNull;
+    ValueType GetValueType(const Value &value) {
+        if (std::holds_alternative<std::monostate>(value)) {
+            return ValueType::kNull;
+        }
+        if (std::holds_alternative<std::int64_t>(value)) {
+            return ValueType::kInt64;
+        }
+        return ValueType::kString;
     }
-    if (std::holds_alternative<std::int64_t>(value)) {
-      return ValueType::kInt64;
-    }
-    return ValueType::kString;
-  }
 
-  std::string ValueToString(const Value &value) {
-    if (std::holds_alternative<std::monostate>(value)) {
-      return "NULL";
+    std::string ValueToString(const Value &value) {
+        if (std::holds_alternative<std::monostate>(value)) {
+            return "NULL";
+        }
+        if (std::holds_alternative<std::int64_t>(value)) {
+            return std::to_string(std::get<std::int64_t>(value));
+        }
+        return std::get<std::string>(value);
     }
-    if (std::holds_alternative<std::int64_t>(value)) {
-      return std::to_string(std::get<std::int64_t>(value));
-    }
-    return std::get<std::string>(value);
-  }
 
 } // namespace dbms::common

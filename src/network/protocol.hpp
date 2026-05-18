@@ -5,15 +5,15 @@
 
 namespace dbms::network {
 
-  struct RequestEnvelope {
-    std::string client_id;
-    std::string jwt_token;
-    std::string payload;
-  };
+    struct RequestEnvelope {
+        std::string client_id;
+        std::string jwt_token;
+        std::string payload;
+    };
 
-  struct ResponseEnvelope {
-    int status_code{200};
-    std::string payload;
-  };
+    struct ResponseEnvelope {
+        int status_code{200};
+        std::string payload;
+    };
 
 } // namespace dbms::network

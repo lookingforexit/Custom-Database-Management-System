@@ -5,9 +5,9 @@
 
 namespace dbms::common {
 
-  class UuidGenerator {
-  public:
-    [[nodiscard]] static std::string NewGuidV4();
-  };
+    class UuidGenerator {
+      public:
+        [[nodiscard]] static std::string NewGuidV4();
+    };
 
 } // namespace dbms::common

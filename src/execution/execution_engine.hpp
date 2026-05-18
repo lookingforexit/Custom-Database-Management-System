@@ -15,26 +15,26 @@
 
 namespace dbms::execution {
 
-  struct QueryResult {
-    std::vector<common::RowData> rows;
-    std::string message;
-  };
+    struct QueryResult {
+        std::vector<common::RowData> rows;
+        std::string message;
+    };
 
-  class ExecutionEngine {
-  public:
-    ExecutionEngine(catalog::Catalog &catalog,
-                    core::RuntimeState &runtime_state,
-                    versioning::VersionStore &version_store,
-                    storage::StringPool &string_pool);
+    class ExecutionEngine {
+      public:
+        ExecutionEngine(catalog::Catalog &catalog,
+                        core::RuntimeState &runtime_state,
+                        versioning::VersionStore &version_store,
+                        storage::StringPool &string_pool);
 
-    [[nodiscard]] common::Result<QueryResult>
-    Execute(core::SessionContext &session, const planner::PlanNode &plan);
+        [[nodiscard]] common::Result<QueryResult>
+        Execute(core::SessionContext &session, const planner::PlanNode &plan);
 
-  private:
-    catalog::Catalog &catalog_;
-    core::RuntimeState &runtime_state_;
-    versioning::VersionStore &version_store_;
-    storage::StringPool &string_pool_;
-  };
+      private:
+        catalog::Catalog &catalog_;
+        core::RuntimeState &runtime_state_;
+        versioning::VersionStore &version_store_;
+        storage::StringPool &string_pool_;
+    };
 
 } // namespace dbms::execution

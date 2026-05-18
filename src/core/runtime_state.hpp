@@ -12,20 +12,20 @@
 
 namespace dbms::core {
 
-  struct TableRuntime {
-    catalog::TableSchema schema;
-    std::unique_ptr<storage::TableHeap> heap;
-    std::unordered_map<std::string, std::unique_ptr<index::BStarPlusTree>>
-        indexes;
-  };
+    struct TableRuntime {
+        catalog::TableSchema schema;
+        std::unique_ptr<storage::TableHeap> heap;
+        std::unordered_map<std::string, std::unique_ptr<index::BStarPlusTree>>
+            indexes;
+    };
 
-  struct DatabaseRuntime {
-    std::string name;
-    std::unordered_map<std::string, TableRuntime> tables;
-  };
+    struct DatabaseRuntime {
+        std::string name;
+        std::unordered_map<std::string, TableRuntime> tables;
+    };
 
-  struct RuntimeState {
-    std::unordered_map<std::string, DatabaseRuntime> databases;
-  };
+    struct RuntimeState {
+        std::unordered_map<std::string, DatabaseRuntime> databases;
+    };
 
 } // namespace dbms::core

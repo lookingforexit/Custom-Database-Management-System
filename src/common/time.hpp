@@ -6,9 +6,9 @@
 
 namespace dbms::common {
 
-  using Clock = std::chrono::system_clock;
-  using TimePoint = Clock::time_point;
+    using Clock = std::chrono::system_clock;
+    using TimePoint = Clock::time_point;
 
-  [[nodiscard]] std::string FormatTimestamp(TimePoint time_point);
+    [[nodiscard]] std::string FormatTimestamp(TimePoint time_point);
 
 } // namespace dbms::common

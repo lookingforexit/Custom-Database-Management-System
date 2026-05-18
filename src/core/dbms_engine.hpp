@@ -14,26 +14,26 @@
 
 namespace dbms::core {
 
-  class DbmsEngine {
-  public:
-    explicit DbmsEngine(std::string root_path);
+    class DbmsEngine {
+      public:
+        explicit DbmsEngine(std::string root_path);
 
-    [[nodiscard]] RuntimeState &runtime_state();
-    [[nodiscard]] catalog::Catalog &catalog();
+        [[nodiscard]] RuntimeState &runtime_state();
+        [[nodiscard]] catalog::Catalog &catalog();
 
-    [[nodiscard]] common::Result<execution::QueryResult>
-    ExecuteSql(SessionContext &session, const std::string &sql);
+        [[nodiscard]] common::Result<execution::QueryResult>
+        ExecuteSql(SessionContext &session, const std::string &sql);
 
-  private:
-    std::string root_path_;
-    RuntimeState runtime_state_;
+      private:
+        std::string root_path_;
+        RuntimeState runtime_state_;
 
-    parser::Parser parser_;
-    planner::Planner planner_;
-    catalog::Catalog catalog_;
-    versioning::VersionStore version_store_;
-    storage::StringPool string_pool_;
-    execution::ExecutionEngine execution_;
-  };
+        parser::Parser parser_;
+        planner::Planner planner_;
+        catalog::Catalog catalog_;
+        versioning::VersionStore version_store_;
+        storage::StringPool string_pool_;
+        execution::ExecutionEngine execution_;
+    };
 
 } // namespace dbms::core

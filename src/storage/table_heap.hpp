@@ -8,16 +8,16 @@
 
 namespace dbms::storage {
 
-  class TableHeap {
-  public:
-    explicit TableHeap(catalog::TableSchema schema);
+    class TableHeap {
+      public:
+        explicit TableHeap(catalog::TableSchema schema);
 
-    [[nodiscard]] common::RowId Insert(common::RowData row);
-    [[nodiscard]] std::vector<common::RowData> ScanAll() const;
+        [[nodiscard]] common::RowId Insert(common::RowData row);
+        [[nodiscard]] std::vector<common::RowData> ScanAll() const;
 
-  private:
-    catalog::TableSchema schema_;
-    std::vector<common::RowData> rows_;
-  };
+      private:
+        catalog::TableSchema schema_;
+        std::vector<common::RowData> rows_;
+    };
 
 } // namespace dbms::storage

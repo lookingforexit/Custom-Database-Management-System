@@ -8,9 +8,10 @@
 
 namespace dbms::parser {
 
-  class Parser {
-  public:
-    [[nodiscard]] common::Result<Statement> Parse(const std::string &sql) const;
-  };
+    class Parser {
+      public:
+        [[nodiscard]] common::Result<Statement>
+        Parse(const std::string &sql) const;
+    };
 
 } // namespace dbms::parser

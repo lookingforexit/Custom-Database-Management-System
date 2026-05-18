@@ -5,19 +5,19 @@
 
 namespace dbms::common {
 
-  enum class ErrorCode {
-    kOk,
-    kParseError,
-    kSemanticError,
-    kStorageError,
-    kAuthorizationError,
-    kNetworkError,
-    kNotImplemented,
-  };
+    enum class ErrorCode {
+        kOk,
+        kParseError,
+        kSemanticError,
+        kStorageError,
+        kAuthorizationError,
+        kNetworkError,
+        kNotImplemented,
+    };
 
-  struct Error {
-    ErrorCode code{ErrorCode::kOk};
-    std::string message;
-  };
+    struct Error {
+        ErrorCode code{ErrorCode::kOk};
+        std::string message;
+    };
 
 } // namespace dbms::common

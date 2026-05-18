@@ -7,10 +7,10 @@
 
 namespace dbms::planner {
 
-  class Planner {
-  public:
-    [[nodiscard]] common::Result<PlanNode>
-    BuildPlan(const parser::Statement &statement) const;
-  };
+    class Planner {
+      public:
+        [[nodiscard]] common::Result<PlanNode>
+        BuildPlan(const parser::Statement &statement) const;
+    };
 
 } // namespace dbms::planner

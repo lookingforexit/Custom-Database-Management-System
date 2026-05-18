@@ -10,18 +10,18 @@
 
 namespace dbms::server {
 
-  class EntrypointServer {
-  public:
-    explicit EntrypointServer(std::string root_path);
+    class EntrypointServer {
+      public:
+        explicit EntrypointServer(std::string root_path);
 
-    [[nodiscard]] network::ResponseEnvelope
-    HandleRequest(const network::RequestEnvelope &request);
+        [[nodiscard]] network::ResponseEnvelope
+        HandleRequest(const network::RequestEnvelope &request);
 
-  private:
-    core::SessionContext &GetOrCreateSession(const std::string &client_id);
+      private:
+        core::SessionContext &GetOrCreateSession(const std::string &client_id);
 
-    core::DbmsEngine engine_;
-    std::unordered_map<std::string, core::SessionContext> sessions_;
-  };
+        core::DbmsEngine engine_;
+        std::unordered_map<std::string, core::SessionContext> sessions_;
+    };
 
 } // namespace dbms::server
