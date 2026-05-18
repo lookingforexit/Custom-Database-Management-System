@@ -13,12 +13,12 @@ class TableHeap {
 public:
     explicit TableHeap(catalog::TableSchema schema);
 
-    [[nodiscard]] common::RowId Insert(common::Row row);
-    [[nodiscard]] std::vector<common::Row> ScanAll() const;
+    [[nodiscard]] common::RowId Insert(common::RowData row);
+    [[nodiscard]] std::vector<common::RowData> ScanAll() const;
 
 private:
     catalog::TableSchema schema_;
-    std::vector<common::Row> rows_;
+    std::vector<common::RowData> rows_;
 };
 
 }  // namespace dbms::storage

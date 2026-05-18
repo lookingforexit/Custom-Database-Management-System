@@ -11,7 +11,7 @@
 namespace dbms::execution {
 
 struct QueryResult {
-    std::vector<common::Row> rows;
+    std::vector<common::RowData> rows;
     std::string message;
 };
 
