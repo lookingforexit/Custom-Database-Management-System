@@ -1,12 +1,12 @@
 #pragma once
 
-// this file defines physical plan node shapes for execution.
+// this file defines physical plan node shapes produced by the planner.
 #include <string>
 #include <vector>
 
 namespace dbms::planner {
 
-enum class PlanNodeKind {
+  enum class PlanNodeKind {
     kSeqScan,
     kIndexScan,
     kFilter,
@@ -17,12 +17,12 @@ enum class PlanNodeKind {
     kDelete,
     kRevert,
     kRemoteShardDispatch,
-};
+  };
 
-struct PlanNode {
+  struct PlanNode {
     PlanNodeKind kind{PlanNodeKind::kSeqScan};
     std::string detail;
     std::vector<PlanNode> children;
-};
+  };
 
-}  // namespace dbms::planner
+} // namespace dbms::planner

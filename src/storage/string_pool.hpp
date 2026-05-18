@@ -1,22 +1,22 @@
 #pragma once
 
-// this file declares string interning for deduplicated in-memory strings.
+// this file defines string interning for deduplicated in-memory strings.
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace dbms::storage {
 
-using StringId = std::size_t;
+  using StringId = std::size_t;
 
-class StringPool {
-public:
-    [[nodiscard]] StringId Intern(const std::string& value);
-    [[nodiscard]] const std::string& Resolve(StringId id) const;
+  class StringPool {
+  public:
+    [[nodiscard]] StringId Intern(const std::string &value);
+    [[nodiscard]] const std::string &Resolve(StringId id) const;
 
-private:
+  private:
     std::unordered_map<std::string, StringId> index_;
     std::vector<std::string> values_;
-};
+  };
 
-}  // namespace dbms::storage
+} // namespace dbms::storage

@@ -1,20 +1,20 @@
 #pragma once
 
-// this file declares basic transaction lifecycle management.
+// this file defines basic transaction lifecycle management interfaces.
 #include <cstdint>
 
 namespace dbms::transaction {
 
-using TransactionId = std::uint64_t;
+  using TransactionId = std::uint64_t;
 
-class TransactionManager {
-public:
+  class TransactionManager {
+  public:
     [[nodiscard]] TransactionId Begin();
     void Commit(TransactionId transaction_id);
     void Rollback(TransactionId transaction_id);
 
-private:
+  private:
     TransactionId next_id_{1};
-};
+  };
 
-}  // namespace dbms::transaction
+} // namespace dbms::transaction

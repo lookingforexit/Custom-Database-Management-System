@@ -1,6 +1,7 @@
 #pragma once
 
-// this file defines the sql ast used by parsing and planning stages.
+// this file defines the sql ast shared by parsing, planning, and execution
+// stages.
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -12,170 +13,160 @@
 
 namespace dbms::parser {
 
-enum class AggregateKind {
+  enum class AggregateKind {
     kSum,
     kCount,
     kAvg,
-};
+  };
 
-enum class ComparisonOperator {
+  enum class ComparisonOperator {
     kEqual,
     kNotEqual,
     kLess,
     kGreater,
     kLessEqual,
     kGreaterEqual,
-};
+  };
 
-enum class LogicalOperator {
+  enum class LogicalOperator {
     kAnd,
     kOr,
-};
+  };
 
-using LiteralValue = common::Value;
+  using LiteralValue = common::Value;
 
-struct Expression;
+  struct Expression;
 
-struct LiteralExpression {
+  struct LiteralExpression {
     LiteralValue value;
-};
+  };
 
-struct ColumnReferenceExpression {
+  struct ColumnReferenceExpression {
     std::optional<std::string> database_name;
     std::optional<std::string> table_name;
     std::string column_name;
-};
+  };
 
-struct BinaryComparisonExpression {
+  struct BinaryComparisonExpression {
     ComparisonOperator op;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
-};
+  };
 
-struct LogicalExpression {
+  struct LogicalExpression {
     LogicalOperator op;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
-};
+  };
 
-struct BetweenExpression {
+  struct BetweenExpression {
     std::unique_ptr<Expression> value;
     std::unique_ptr<Expression> lower_bound;
     std::unique_ptr<Expression> upper_bound;
-};
+  };
 
-struct LikeExpression {
+  struct LikeExpression {
     std::unique_ptr<Expression> value;
     std::unique_ptr<Expression> pattern;
-};
+  };
 
-struct AggregateCallExpression {
+  struct AggregateCallExpression {
     AggregateKind kind;
     std::string column_name;
-};
+  };
 
-struct Expression {
-    using Variant = std::variant<
-        LiteralExpression,
-        ColumnReferenceExpression,
-        BinaryComparisonExpression,
-        LogicalExpression,
-        BetweenExpression,
-        LikeExpression,
-        AggregateCallExpression>;
+  struct Expression {
+    using Variant = std::variant<LiteralExpression, ColumnReferenceExpression,
+                                 BinaryComparisonExpression, LogicalExpression,
+                                 BetweenExpression, LikeExpression,
+                                 AggregateCallExpression>;
 
     Variant node;
-};
+  };
 
-struct QualifiedName {
+  struct QualifiedName {
     std::optional<std::string> database_name;
     std::string object_name;
-};
+  };
 
-struct ColumnDefinition {
+  struct ColumnDefinition {
     std::string name;
     common::ValueType type{common::ValueType::kNull};
     bool not_null{false};
     bool indexed{false};
     std::optional<LiteralValue> default_value;
-};
+  };
 
-struct SelectItem {
+  struct SelectItem {
     bool is_wildcard{false};
     std::string column_name;
     std::optional<std::string> alias;
     std::optional<AggregateKind> aggregate;
-};
+  };
 
-struct Assignment {
+  struct Assignment {
     std::string column_name;
     Expression value;
-};
+  };
 
-struct CreateDatabaseStatement {
+  struct CreateDatabaseStatement {
     std::string database_name;
-};
+  };
 
-struct DropDatabaseStatement {
+  struct DropDatabaseStatement {
     std::string database_name;
-};
+  };
 
-struct UseDatabaseStatement {
+  struct UseDatabaseStatement {
     std::string database_name;
-};
+  };
 
-struct CreateTableStatement {
+  struct CreateTableStatement {
     QualifiedName table_name;
     std::vector<ColumnDefinition> columns;
-};
+  };
 
-struct DropTableStatement {
+  struct DropTableStatement {
     QualifiedName table_name;
-};
+  };
 
-struct InsertStatement {
+  struct InsertStatement {
     QualifiedName table_name;
     std::vector<std::string> column_names;
     std::vector<std::vector<Expression>> rows;
-};
+  };
 
-struct UpdateStatement {
+  struct UpdateStatement {
     QualifiedName table_name;
     std::vector<Assignment> assignments;
     std::optional<Expression> where;
-};
+  };
 
-struct DeleteStatement {
+  struct DeleteStatement {
     QualifiedName table_name;
     std::optional<Expression> where;
-};
+  };
 
-struct SelectStatement {
+  struct SelectStatement {
     QualifiedName table_name;
     std::vector<SelectItem> items;
     std::optional<Expression> where;
-};
+  };
 
-struct RevertStatement {
+  struct RevertStatement {
     QualifiedName table_name;
     std::string timestamp;
-};
+  };
 
-struct UnknownStatement {
+  struct UnknownStatement {
     std::string raw_sql;
-};
+  };
 
-using Statement = std::variant<
-    UnknownStatement,
-    CreateDatabaseStatement,
-    DropDatabaseStatement,
-    UseDatabaseStatement,
-    CreateTableStatement,
-    DropTableStatement,
-    InsertStatement,
-    UpdateStatement,
-    DeleteStatement,
-    SelectStatement,
-    RevertStatement>;
+  using Statement =
+      std::variant<UnknownStatement, CreateDatabaseStatement,
+                   DropDatabaseStatement, UseDatabaseStatement,
+                   CreateTableStatement, DropTableStatement, InsertStatement,
+                   UpdateStatement, DeleteStatement, SelectStatement,
+                   RevertStatement>;
 
-}  // namespace dbms::parser
+} // namespace dbms::parser

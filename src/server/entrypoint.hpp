@@ -1,22 +1,27 @@
 #pragma once
 
-// this file declares the entrypoint server request handling facade.
-#include "execution/execution_engine.hpp"
+// this file defines the entrypoint facade that manages requests and client
+// sessions.
+#include <string>
+#include <unordered_map>
+
+#include "core/dbms_engine.hpp"
 #include "network/protocol.hpp"
-#include "parser/parser.hpp"
-#include "planner/planner.hpp"
 
 namespace dbms::server {
 
-class EntrypointServer {
-public:
-    [[nodiscard]] network::ResponseEnvelope HandleRequest(
-        const network::RequestEnvelope& request) const;
+  class EntrypointServer {
+  public:
+    explicit EntrypointServer(std::string root_path);
 
-private:
-    parser::Parser parser_;
-    planner::Planner planner_;
-    execution::ExecutionEngine execution_;
-};
+    [[nodiscard]] network::ResponseEnvelope
+    HandleRequest(const network::RequestEnvelope &request);
 
-}  // namespace dbms::server
+  private:
+    core::SessionContext &GetOrCreateSession(const std::string &client_id);
+
+    core::DbmsEngine engine_;
+    std::unordered_map<std::string, core::SessionContext> sessions_;
+  };
+
+} // namespace dbms::server

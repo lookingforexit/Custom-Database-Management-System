@@ -1,16 +1,16 @@
 #pragma once
 
-// this file declares the planner that picks scans and execution steps.
+// this file defines the planner interface that maps ast statements to plans.
 #include "common/result.hpp"
 #include "parser/ast.hpp"
 #include "planner/plan.hpp"
 
 namespace dbms::planner {
 
-class Planner {
-public:
-    [[nodiscard]] common::Result<PlanNode> BuildPlan(
-        const parser::Statement& statement) const;
-};
+  class Planner {
+  public:
+    [[nodiscard]] common::Result<PlanNode>
+    BuildPlan(const parser::Statement &statement) const;
+  };
 
-}  // namespace dbms::planner
+} // namespace dbms::planner

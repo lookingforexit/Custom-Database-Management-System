@@ -11,6 +11,7 @@ add_library(dbms_core
     src/catalog/rbac.cpp
     src/catalog/schema.cpp
     src/common/types.cpp
+    src/core/dbms_engine.cpp
     src/execution/execution_engine.cpp
     src/index/b_star_plus_tree.cpp
     src/network/protocol.cpp

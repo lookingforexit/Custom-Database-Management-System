@@ -1,4 +1,5 @@
 #include "catalog/schema.hpp"
 
-// this file will contain schema helper logic if metadata grows more complex.
-namespace dbms::catalog {}  // namespace dbms::catalog
+// this file holds schema-related helpers when metadata grows beyond plain
+// structs.
+namespace dbms::catalog {} // namespace dbms::catalog

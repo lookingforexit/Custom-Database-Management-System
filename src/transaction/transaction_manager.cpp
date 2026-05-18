@@ -1,14 +1,12 @@
 #include "transaction/transaction_manager.hpp"
 
-// this file will handle begin, commit, rollback, and concurrency hooks.
+// this file implements basic transaction lifecycle behavior.
 namespace dbms::transaction {
 
-TransactionId TransactionManager::Begin() {
-    return next_id_++;
-}
+  TransactionId TransactionManager::Begin() { return next_id_++; }
 
-void TransactionManager::Commit(TransactionId) {}
+  void TransactionManager::Commit(TransactionId) {}
 
-void TransactionManager::Rollback(TransactionId) {}
+  void TransactionManager::Rollback(TransactionId) {}
 
-}  // namespace dbms::transaction
+} // namespace dbms::transaction

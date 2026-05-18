@@ -1,6 +1,6 @@
 #pragma once
 
-// this file declares the parser that builds ast nodes from tokens.
+// this file defines the parser interface that builds ast nodes from sql text.
 #include <string>
 
 #include "common/result.hpp"
@@ -8,9 +8,9 @@
 
 namespace dbms::parser {
 
-class Parser {
-public:
-    [[nodiscard]] common::Result<Statement> Parse(const std::string& sql) const;
-};
+  class Parser {
+  public:
+    [[nodiscard]] common::Result<Statement> Parse(const std::string &sql) const;
+  };
 
-}  // namespace dbms::parser
+} // namespace dbms::parser

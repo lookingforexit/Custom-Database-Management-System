@@ -1,26 +1,32 @@
 #include "server/entrypoint.hpp"
 
-// this file will orchestrate parse, plan, auth, dispatch, and response flow.
+// this file routes requests through the dbms engine and preserves session
+// state.
 namespace dbms::server {
 
-network::ResponseEnvelope EntrypointServer::HandleRequest(
-    const network::RequestEnvelope& request) const {
-    auto parsed = parser_.Parse(request.payload);
-    if (!parsed.ok()) {
-        return {.status_code = 400, .payload = "Parse error"};
-    }
+  EntrypointServer::EntrypointServer(std::string root_path)
+      : engine_(std::move(root_path)) {}
 
-    auto plan = planner_.BuildPlan(*parsed.value);
-    if (!plan.ok()) {
-        return {.status_code = 422, .payload = "Planning error"};
+  core::SessionContext &
+  EntrypointServer::GetOrCreateSession(const std::string &client_id) {
+    auto [it, inserted] = sessions_.try_emplace(client_id);
+    if (inserted) {
+      it->second.client_id = client_id;
     }
+    return it->second;
+  }
 
-    auto result = execution_.Execute(*plan.value);
+  network::ResponseEnvelope
+  EntrypointServer::HandleRequest(const network::RequestEnvelope &request) {
+    auto &session = GetOrCreateSession(request.client_id);
+    session.client_id = request.client_id;
+
+    auto result = engine_.ExecuteSql(session, request.payload);
     if (!result.ok()) {
-        return {.status_code = 500, .payload = "Execution error"};
+      return {.status_code = 400, .payload = "Request failed"};
     }
 
     return {.status_code = 200, .payload = result.value->message};
-}
+  }
 
-}  // namespace dbms::server
+} // namespace dbms::server

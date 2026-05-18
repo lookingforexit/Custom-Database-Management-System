@@ -1,7 +1,19 @@
 #include <iostream>
 
-// this file will start the entrypoint server and wire runtime services.
+#include "network/protocol.hpp"
+#include "server/entrypoint.hpp"
+
+// this file boots the entrypoint server process and exercises the request path.
 int main() {
-    std::cout << "dbms_server stub\n";
-    return 0;
+  dbms::server::EntrypointServer server("./data");
+  dbms::network::RequestEnvelope request{
+      .client_id = "server",
+      .jwt_token = "",
+      .payload = "SELECT * FROM test;",
+  };
+  const auto response = server.HandleRequest(request);
+
+  std::cout << "dbms_server stub\n";
+  std::cout << "status=" << response.status_code << "\n";
+  return 0;
 }
