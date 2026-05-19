@@ -30,7 +30,7 @@ namespace dbms::core {
         RuntimeState runtime_state_;
 
         parser::Parser parser_;
-        planner::Planner planner_;
+        planner::Planner planner_{&runtime_state_};
         catalog::Catalog catalog_;
         versioning::VersionStore version_store_;
         storage::StringPool string_pool_;

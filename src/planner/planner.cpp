@@ -50,7 +50,83 @@ namespace dbms::planner {
             return out.str();
         }
 
+        std::optional<std::string>
+        ExtractIndexedCandidateColumn(const parser::Expression &expression) {
+            if (const auto *comparison =
+                    std::get_if<parser::BinaryComparisonExpression>(&expression.node);
+                comparison != nullptr) {
+                const bool indexable_operator =
+                    comparison->op == parser::ComparisonOperator::kEqual ||
+                    comparison->op == parser::ComparisonOperator::kLess ||
+                    comparison->op == parser::ComparisonOperator::kGreater ||
+                    comparison->op == parser::ComparisonOperator::kLessEqual ||
+                    comparison->op == parser::ComparisonOperator::kGreaterEqual;
+                if (!indexable_operator) {
+                    return std::nullopt;
+                }
+                const auto *column =
+                    std::get_if<parser::ColumnReferenceExpression>(
+                        &comparison->left->node);
+                const auto *literal =
+                    std::get_if<parser::LiteralExpression>(
+                        &comparison->right->node);
+                if (column != nullptr && literal != nullptr) {
+                    return column->column_name;
+                }
+                return std::nullopt;
+            }
+
+            if (const auto *between =
+                    std::get_if<parser::BetweenExpression>(&expression.node);
+                between != nullptr) {
+                const auto *column =
+                    std::get_if<parser::ColumnReferenceExpression>(
+                        &between->value->node);
+                const auto *lower =
+                    std::get_if<parser::LiteralExpression>(
+                        &between->lower_bound->node);
+                const auto *upper =
+                    std::get_if<parser::LiteralExpression>(
+                        &between->upper_bound->node);
+                if (column != nullptr && lower != nullptr && upper != nullptr) {
+                    return column->column_name;
+                }
+                return std::nullopt;
+            }
+
+            return std::nullopt;
+        }
+
+        bool TableHasIndexOnColumn(const core::RuntimeState *runtime_state,
+                                   const parser::QualifiedName &table_name,
+                                   const std::string &column_name) {
+            if (runtime_state == nullptr) {
+                return false;
+            }
+            if (!table_name.database_name.has_value()) {
+                return false;
+            }
+            auto database_it =
+                runtime_state->databases.find(*table_name.database_name);
+            if (database_it == runtime_state->databases.end()) {
+                return false;
+            }
+            auto table_it =
+                database_it->second.tables.find(table_name.object_name);
+            if (table_it == database_it->second.tables.end()) {
+                return false;
+            }
+            return table_it->second.indexes.contains(column_name);
+        }
+
     } // namespace
+
+    Planner::Planner(core::RuntimeState *runtime_state)
+        : runtime_state_(runtime_state) {}
+
+    void Planner::set_runtime_state(core::RuntimeState *runtime_state) {
+        runtime_state_ = runtime_state;
+    }
 
     common::Result<PlanNode>
     Planner::BuildPlan(parser::Statement statement) const {
@@ -142,6 +218,16 @@ namespace dbms::planner {
             scan.statement = statement_ptr;
 
             if (select->where.has_value()) {
+                if (auto index_column =
+                        ExtractIndexedCandidateColumn(*select->where);
+                    index_column.has_value() &&
+                    TableHasIndexOnColumn(runtime_state_, select->table_name,
+                                          *index_column)) {
+                    scan.kind = PlanNodeKind::kIndexScan;
+                    scan.detail = "index scan " +
+                                  QualifiedNameToString(select->table_name) +
+                                  " on " + *index_column;
+                }
                 PlanNode filter;
                 filter.kind = PlanNodeKind::kFilter;
                 filter.detail = "filter";

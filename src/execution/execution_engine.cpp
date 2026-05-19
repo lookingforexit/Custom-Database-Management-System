@@ -3,7 +3,9 @@
 // this file implements execution entry points for scans, writes, and
 // aggregates.
 #include <algorithm>
+#include <iomanip>
 #include <regex>
+#include <sstream>
 #include <unordered_map>
 
 #include "catalog/schema.hpp"
@@ -50,6 +52,24 @@ namespace dbms::execution {
         EvaluateValueExpression(const parser::Expression &expr,
                                 const catalog::TableSchema &schema,
                                 const common::RowData &row);
+
+        std::string EncodeIndexKey(const common::Value &value,
+                                   common::ValueType type) {
+            if (common::IsNull(value)) {
+                return "N";
+            }
+            if (type == common::ValueType::kInt64) {
+                const auto signed_value = std::get<std::int64_t>(value);
+                const auto ordered_value =
+                    static_cast<std::uint64_t>(signed_value) ^
+                    (1ULL << 63ULL);
+                std::ostringstream output;
+                output << "I" << std::hex << std::setw(16) << std::setfill('0')
+                       << ordered_value;
+                return output.str();
+            }
+            return "S" + std::get<std::string>(value);
+        }
 
         common::Result<bool> ValidateRowAgainstSchema(
             common::RowData &row, const catalog::TableSchema &schema) {
@@ -104,7 +124,8 @@ namespace dbms::execution {
                             common::ErrorCode::kConstraintViolation,
                             "INDEXED column cannot be NULL: " + column_name);
                     }
-                    const std::string key = common::ValueToString(value);
+                    const std::string key = EncodeIndexKey(
+                        value, table_runtime.schema.columns[*column_index].type);
                     if (!index_tree->Find(key).empty()) {
                         return common::MakeError<bool>(
                             common::ErrorCode::kConstraintViolation,
@@ -267,8 +288,153 @@ namespace dbms::execution {
         common::Result<std::vector<common::RowData>>
         FilterRows(const std::vector<common::RowData> &rows,
                    const std::optional<parser::Expression> &where_clause,
-                   const catalog::TableSchema &schema) {
+                   const catalog::TableSchema &schema,
+                   const core::TableRuntime *table_runtime,
+                   bool *used_index_path) {
             std::vector<common::RowData> filtered;
+            if (used_index_path != nullptr) {
+                *used_index_path = false;
+            }
+
+            auto append_if_passes = [&](std::size_t row_index) -> common::Result<bool> {
+                if (row_index >= rows.size()) {
+                    return common::MakeSuccess(true);
+                }
+                const auto &row = rows[row_index];
+                if (where_clause.has_value()) {
+                    auto pass = EvaluatePredicate(*where_clause, schema, row);
+                    if (!pass.ok()) {
+                        return common::MakeError<bool>(pass.error->code,
+                                                       pass.error->message);
+                    }
+                    if (!*pass.value) {
+                        return common::MakeSuccess(true);
+                    }
+                }
+                filtered.push_back(row);
+                return common::MakeSuccess(true);
+            };
+
+            if (where_clause.has_value() && table_runtime != nullptr) {
+                if (const auto *comparison =
+                        std::get_if<parser::BinaryComparisonExpression>(
+                            &where_clause->node);
+                    comparison != nullptr) {
+                    const auto *column =
+                        std::get_if<parser::ColumnReferenceExpression>(
+                            &comparison->left->node);
+                    const auto *literal =
+                        std::get_if<parser::LiteralExpression>(
+                            &comparison->right->node);
+                    if (column != nullptr && literal != nullptr) {
+                        auto column_index =
+                            FindColumnIndex(schema, column->column_name);
+                        auto index_it =
+                            table_runtime->indexes.find(column->column_name);
+                        if (column_index.has_value() &&
+                            index_it != table_runtime->indexes.end()) {
+                            const auto encoded =
+                                EncodeIndexKey(literal->value,
+                                               schema.columns[*column_index].type);
+                            std::vector<common::RowId> candidate_row_ids;
+                            switch (comparison->op) {
+                                case parser::ComparisonOperator::kEqual:
+                                    candidate_row_ids = index_it->second->Find(encoded);
+                                    break;
+                                case parser::ComparisonOperator::kLess:
+                                case parser::ComparisonOperator::kLessEqual: {
+                                    auto entries = index_it->second->RangeScan("",
+                                                                               encoded + "\xFF");
+                                    for (const auto &entry : entries) {
+                                        candidate_row_ids.insert(candidate_row_ids.end(),
+                                                                 entry.row_ids.begin(),
+                                                                 entry.row_ids.end());
+                                    }
+                                    break;
+                                }
+                                case parser::ComparisonOperator::kGreater:
+                                case parser::ComparisonOperator::kGreaterEqual: {
+                                    auto entries = index_it->second->RangeScan(encoded,
+                                                                               "\xFF\xFF\xFF\xFF");
+                                    for (const auto &entry : entries) {
+                                        candidate_row_ids.insert(candidate_row_ids.end(),
+                                                                 entry.row_ids.begin(),
+                                                                 entry.row_ids.end());
+                                    }
+                                    break;
+                                }
+                                case parser::ComparisonOperator::kNotEqual:
+                                    break;
+                            }
+                            for (auto row_id : candidate_row_ids) {
+                                auto append_result = append_if_passes(
+                                    static_cast<std::size_t>(row_id));
+                                if (!append_result.ok()) {
+                                    return common::MakeError<
+                                        std::vector<common::RowData>>(
+                                        append_result.error->code,
+                                        append_result.error->message);
+                                }
+                            }
+                            if (comparison->op !=
+                                parser::ComparisonOperator::kNotEqual) {
+                                if (used_index_path != nullptr) {
+                                    *used_index_path = true;
+                                }
+                                return common::MakeSuccess(std::move(filtered));
+                            }
+                        }
+                    }
+                }
+
+                if (const auto *between =
+                        std::get_if<parser::BetweenExpression>(&where_clause->node);
+                    between != nullptr) {
+                    const auto *column =
+                        std::get_if<parser::ColumnReferenceExpression>(
+                            &between->value->node);
+                    const auto *lower =
+                        std::get_if<parser::LiteralExpression>(
+                            &between->lower_bound->node);
+                    const auto *upper =
+                        std::get_if<parser::LiteralExpression>(
+                            &between->upper_bound->node);
+                    if (column != nullptr && lower != nullptr && upper != nullptr) {
+                        auto column_index =
+                            FindColumnIndex(schema, column->column_name);
+                        auto index_it =
+                            table_runtime->indexes.find(column->column_name);
+                        if (column_index.has_value() &&
+                            index_it != table_runtime->indexes.end()) {
+                            auto lower_key =
+                                EncodeIndexKey(lower->value,
+                                               schema.columns[*column_index].type);
+                            auto upper_key =
+                                EncodeIndexKey(upper->value,
+                                               schema.columns[*column_index].type);
+                            auto entries =
+                                index_it->second->RangeScan(lower_key, upper_key);
+                            for (const auto &entry : entries) {
+                                for (auto row_id : entry.row_ids) {
+                                    auto append_result = append_if_passes(
+                                        static_cast<std::size_t>(row_id));
+                                    if (!append_result.ok()) {
+                                        return common::MakeError<
+                                            std::vector<common::RowData>>(
+                                            append_result.error->code,
+                                            append_result.error->message);
+                                    }
+                                }
+                            }
+                            if (used_index_path != nullptr) {
+                                *used_index_path = true;
+                            }
+                            return common::MakeSuccess(std::move(filtered));
+                        }
+                    }
+                }
+            }
+
             for (const auto &row : rows) {
                 if (where_clause.has_value()) {
                     auto pass = EvaluatePredicate(*where_clause, schema, row);
@@ -506,8 +672,9 @@ namespace dbms::execution {
                             common::ErrorCode::kConstraintViolation,
                             "INDEXED column cannot be NULL: " + column);
                     }
-                    const auto key = common::ValueToString(value);
-                    if (!index_ptr->Find(key).empty()) {
+                    const auto encoded_key =
+                        EncodeIndexKey(value, table.schema.columns[*idx].type);
+                    if (!index_ptr->Find(encoded_key).empty()) {
                         return common::MakeError<QueryResult>(
                             common::ErrorCode::kConstraintViolation,
                             "duplicate value for INDEXED column: " + column);
@@ -518,8 +685,10 @@ namespace dbms::execution {
                 for (const auto &[column, index_ptr] : table.indexes) {
                     auto idx = FindColumnIndex(table.schema, column);
                     if (idx.has_value()) {
-                        index_ptr->Insert(common::ValueToString(row.values[*idx]),
-                                          row_id);
+                        index_ptr->Insert(
+                            EncodeIndexKey(row.values[*idx],
+                                           table.schema.columns[*idx].type),
+                            row_id);
                     }
                 }
             }
@@ -693,7 +862,8 @@ namespace dbms::execution {
             const auto &table = table_it->second;
             const auto rows = table.heap->ScanAll();
             auto filtered_rows =
-                FilterRows(rows, select->where, table.schema);
+                FilterRows(rows, select->where, table.schema, &table,
+                           /*used_index_path=*/nullptr);
             if (!filtered_rows.ok()) {
                 return common::MakeError<QueryResult>(
                     filtered_rows.error->code, filtered_rows.error->message);
