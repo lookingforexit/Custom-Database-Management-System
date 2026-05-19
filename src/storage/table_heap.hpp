@@ -14,6 +14,7 @@ namespace dbms::storage {
 
         [[nodiscard]] common::RowId Insert(common::RowData row);
         [[nodiscard]] std::vector<common::RowData> ScanAll() const;
+        void ReplaceAll(std::vector<common::RowData> rows);
 
       private:
         catalog::TableSchema schema_;

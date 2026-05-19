@@ -36,8 +36,52 @@ int main() {
     dbms::core::SessionContext session;
     session.client_id = "smoke";
 
-    auto result = engine.ExecuteSql(session, "SELECT * FROM test;");
+    auto result = engine.ExecuteSql(session, "CREATE DATABASE test_db;");
     if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "USE test_db;");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session,
+                               "CREATE TABLE test (id INT INDEXED, name STRING);");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session,
+                               "INSERT INTO test (id, name) VALUES (1, \"Alice\");");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "SELECT * FROM test;");
+    if (!result.ok() || result.value->rows.size() != 1) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "UPDATE test SET name = \"Bob\" WHERE id == 1;");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "SELECT name FROM test WHERE id == 1;");
+    if (!result.ok() || result.value->rows.size() != 1 ||
+        !std::holds_alternative<std::string>(result.value->rows[0].values[0]) ||
+        std::get<std::string>(result.value->rows[0].values[0]) != "Bob") {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "DELETE FROM test WHERE id == 1;");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "SELECT * FROM test;");
+    if (!result.ok() || !result.value->rows.empty()) {
         std::cout << "pipeline_error\n";
         return 1;
     }

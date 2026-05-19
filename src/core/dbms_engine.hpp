@@ -7,6 +7,7 @@
 #include "execution/execution_engine.hpp"
 #include "parser/parser.hpp"
 #include "planner/planner.hpp"
+#include "runtime_persistence.hpp"
 #include "runtime_state.hpp"
 #include "session_context.hpp"
 #include "storage/string_pool.hpp"
@@ -34,6 +35,7 @@ namespace dbms::core {
         versioning::VersionStore version_store_;
         storage::StringPool string_pool_;
         execution::ExecutionEngine execution_;
+        RuntimePersistence persistence_;
     };
 
 } // namespace dbms::core

@@ -53,11 +53,15 @@ namespace dbms::planner {
     } // namespace
 
     common::Result<PlanNode>
-    Planner::BuildPlan(const parser::Statement &statement) const {
+    Planner::BuildPlan(parser::Statement statement) const {
         PlanNode node;
+        auto statement_ptr =
+            std::make_shared<parser::Statement>(std::move(statement));
+        const auto &statement_ref = *statement_ptr;
+        node.statement = statement_ptr;
 
         if (const auto *create_db =
-                std::get_if<parser::CreateDatabaseStatement>(&statement);
+                std::get_if<parser::CreateDatabaseStatement>(&statement_ref);
             create_db != nullptr) {
             node.kind = PlanNodeKind::kCreateDatabase;
             node.detail = "create database " + create_db->database_name;
@@ -65,7 +69,7 @@ namespace dbms::planner {
         }
 
         if (const auto *drop_db =
-                std::get_if<parser::DropDatabaseStatement>(&statement);
+                std::get_if<parser::DropDatabaseStatement>(&statement_ref);
             drop_db != nullptr) {
             node.kind = PlanNodeKind::kDropDatabase;
             node.detail = "drop database " + drop_db->database_name;
@@ -73,7 +77,7 @@ namespace dbms::planner {
         }
 
         if (const auto *use_db =
-                std::get_if<parser::UseDatabaseStatement>(&statement);
+                std::get_if<parser::UseDatabaseStatement>(&statement_ref);
             use_db != nullptr) {
             node.kind = PlanNodeKind::kUseDatabase;
             node.detail = "use database " + use_db->database_name;
@@ -81,7 +85,7 @@ namespace dbms::planner {
         }
 
         if (const auto *create_table =
-                std::get_if<parser::CreateTableStatement>(&statement);
+                std::get_if<parser::CreateTableStatement>(&statement_ref);
             create_table != nullptr) {
             node.kind = PlanNodeKind::kCreateTable;
             node.detail = "create table " +
@@ -90,7 +94,7 @@ namespace dbms::planner {
         }
 
         if (const auto *drop_table =
-                std::get_if<parser::DropTableStatement>(&statement);
+                std::get_if<parser::DropTableStatement>(&statement_ref);
             drop_table != nullptr) {
             node.kind = PlanNodeKind::kDropTable;
             node.detail = "drop table " +
@@ -98,7 +102,7 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
-        if (const auto *insert = std::get_if<parser::InsertStatement>(&statement);
+        if (const auto *insert = std::get_if<parser::InsertStatement>(&statement_ref);
             insert != nullptr) {
             node.kind = PlanNodeKind::kInsert;
             node.detail = "insert into " +
@@ -107,7 +111,7 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
-        if (const auto *update = std::get_if<parser::UpdateStatement>(&statement);
+        if (const auto *update = std::get_if<parser::UpdateStatement>(&statement_ref);
             update != nullptr) {
             node.kind = PlanNodeKind::kUpdate;
             node.detail = "update " + QualifiedNameToString(update->table_name) +
@@ -116,16 +120,16 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
-        if (const auto *delete_stmt =
-                std::get_if<parser::DeleteStatement>(&statement);
-            delete_stmt != nullptr) {
+        if (const auto *delete_statement =
+                std::get_if<parser::DeleteStatement>(&statement_ref);
+            delete_statement != nullptr) {
             node.kind = PlanNodeKind::kDelete;
             node.detail =
-                "delete from " + QualifiedNameToString(delete_stmt->table_name);
+                "delete from " + QualifiedNameToString(delete_statement->table_name);
             return common::MakeSuccess(std::move(node));
         }
 
-        if (const auto *select = std::get_if<parser::SelectStatement>(&statement);
+        if (const auto *select = std::get_if<parser::SelectStatement>(&statement_ref);
             select != nullptr) {
             node.kind = PlanNodeKind::kProject;
             node.detail =
@@ -135,11 +139,13 @@ namespace dbms::planner {
             PlanNode scan;
             scan.kind = PlanNodeKind::kSeqScan;
             scan.detail = "scan " + QualifiedNameToString(select->table_name);
+            scan.statement = statement_ptr;
 
             if (select->where.has_value()) {
                 PlanNode filter;
                 filter.kind = PlanNodeKind::kFilter;
                 filter.detail = "filter";
+                filter.statement = statement_ptr;
                 filter.children.push_back(std::move(scan));
                 node.children.push_back(std::move(filter));
             } else {
@@ -150,6 +156,7 @@ namespace dbms::planner {
                 PlanNode aggregate;
                 aggregate.kind = PlanNodeKind::kAggregate;
                 aggregate.detail = "aggregate";
+                aggregate.statement = statement_ptr;
                 aggregate.children.push_back(std::move(node));
                 return common::MakeSuccess(std::move(aggregate));
             }
@@ -157,7 +164,7 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
-        if (const auto *revert = std::get_if<parser::RevertStatement>(&statement);
+        if (const auto *revert = std::get_if<parser::RevertStatement>(&statement_ref);
             revert != nullptr) {
             node.kind = PlanNodeKind::kRevert;
             node.detail = "revert " + QualifiedNameToString(revert->table_name) +
@@ -165,7 +172,7 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
-        if (std::holds_alternative<parser::UnknownStatement>(statement)) {
+        if (std::holds_alternative<parser::UnknownStatement>(statement_ref)) {
             return common::MakeError<PlanNode>(
                 common::ErrorCode::kParseError,
                 "cannot build plan for unknown statement");

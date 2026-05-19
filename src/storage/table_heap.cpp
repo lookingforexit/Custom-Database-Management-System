@@ -14,4 +14,8 @@ namespace dbms::storage {
 
     std::vector<common::RowData> TableHeap::ScanAll() const { return rows_; }
 
+    void TableHeap::ReplaceAll(std::vector<common::RowData> rows) {
+        rows_ = std::move(rows);
+    }
+
 } // namespace dbms::storage

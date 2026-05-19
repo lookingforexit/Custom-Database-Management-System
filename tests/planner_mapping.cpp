@@ -8,11 +8,11 @@ namespace {
 
     dbms::planner::PlanNode BuildPlanOrAbort(const std::string &sql) {
         dbms::parser::Parser parser;
-        const auto parsed = parser.Parse(sql);
+        auto parsed = parser.Parse(sql);
         assert(parsed.ok());
 
         dbms::planner::Planner planner;
-        auto plan = planner.BuildPlan(*parsed.value);
+        auto plan = planner.BuildPlan(std::move(*parsed.value));
         assert(plan.ok());
         return std::move(*plan.value);
     }

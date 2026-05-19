@@ -1,8 +1,11 @@
 #pragma once
 
 // this file defines physical plan node shapes produced by the planner.
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "parser/ast.hpp"
 
 namespace dbms::planner {
 
@@ -27,6 +30,7 @@ namespace dbms::planner {
     struct PlanNode {
         PlanNodeKind kind{PlanNodeKind::kSeqScan};
         std::string detail;
+        std::shared_ptr<const parser::Statement> statement;
         std::vector<PlanNode> children;
     };
 
