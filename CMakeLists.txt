@@ -107,3 +107,7 @@ add_test(NAME dbms_core_integration_extended COMMAND dbms_core_integration_exten
 add_executable(dbms_index_no_data_duplication tests/index_no_data_duplication.cpp)
 target_link_libraries(dbms_index_no_data_duplication PRIVATE dbms_core)
 add_test(NAME dbms_index_no_data_duplication COMMAND dbms_index_no_data_duplication)
+
+add_executable(dbms_revert_no_file_snapshot tests/revert_no_file_snapshot.cpp)
+target_link_libraries(dbms_revert_no_file_snapshot PRIVATE dbms_core)
+add_test(NAME dbms_revert_no_file_snapshot COMMAND dbms_revert_no_file_snapshot)
