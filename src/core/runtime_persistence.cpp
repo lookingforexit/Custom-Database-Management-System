@@ -148,7 +148,13 @@ namespace dbms::core {
         return root_path_ + "/runtime_state.tsv";
     }
 
-    bool RuntimePersistence::Save(const RuntimeState &runtime_state) const {
+    std::string RuntimePersistence::HistoryFilePath() const {
+        return root_path_ + "/version_history.tsv";
+    }
+
+    bool RuntimePersistence::Save(
+        const RuntimeState &runtime_state,
+        const versioning::VersionStore &version_store) const {
         std::filesystem::create_directories(root_path_);
         const auto final_path = StateFilePath();
         const auto temp_path = final_path + ".tmp";
@@ -201,10 +207,51 @@ namespace dbms::core {
         std::filesystem::remove(final_path, remove_error);
         std::error_code rename_error;
         std::filesystem::rename(temp_path, final_path, rename_error);
-        return !rename_error;
+        if (rename_error) {
+            return false;
+        }
+
+        const auto history_final_path = HistoryFilePath();
+        const auto history_temp_path = history_final_path + ".tmp";
+        std::ofstream history_output(history_temp_path, std::ios::trunc);
+        if (!history_output.is_open()) {
+            return false;
+        }
+        history_output << kFormatTag << "\t" << kFormatVersion << "\n";
+        for (const auto &record : version_store.AllRecords()) {
+            history_output << "CHANGE\t" << Escape(record.database_name) << "\t"
+                           << Escape(record.table_name) << "\t"
+                           << Escape(record.operation) << "\t"
+                           << Escape(record.timestamp) << "\n";
+            for (const auto &row : record.snapshot_rows) {
+                history_output << "SNAPSHOT_ROW";
+                for (const auto &value : row.values) {
+                    history_output << "\t" << EncodeValue(value);
+                }
+                history_output << "\n";
+            }
+            history_output << "CHANGE_END\n";
+        }
+        history_output.flush();
+        if (!history_output.good()) {
+            return false;
+        }
+        history_output.close();
+        if (!history_output.good()) {
+            return false;
+        }
+
+        std::error_code history_remove_error;
+        std::filesystem::remove(history_final_path, history_remove_error);
+        std::error_code history_rename_error;
+        std::filesystem::rename(history_temp_path, history_final_path,
+                                history_rename_error);
+        return !history_rename_error;
     }
 
-    bool RuntimePersistence::Load(RuntimeState &runtime_state) const {
+    bool RuntimePersistence::Load(
+        RuntimeState &runtime_state,
+        versioning::VersionStore &version_store) const {
         std::ifstream input(StateFilePath());
         if (!input.is_open()) {
             return true;
@@ -352,6 +399,76 @@ namespace dbms::core {
                 }
             }
         }
+
+        std::ifstream history_input(HistoryFilePath());
+        if (!history_input.is_open()) {
+            version_store.Clear();
+            return true;
+        }
+        std::vector<versioning::ChangeRecord> loaded_records;
+        std::optional<versioning::ChangeRecord> pending_record;
+        format_checked = false;
+        while (std::getline(history_input, line)) {
+            if (line.empty()) {
+                continue;
+            }
+            const auto parts = SplitByTab(line);
+            if (parts.empty()) {
+                continue;
+            }
+
+            if (!format_checked) {
+                format_checked = true;
+                if (parts[0] == kFormatTag) {
+                    if (parts.size() != 2 || parts[1] != kFormatVersion) {
+                        return false;
+                    }
+                    continue;
+                }
+            }
+
+            if (parts[0] == "CHANGE" && parts.size() == 5) {
+                if (pending_record.has_value()) {
+                    return false;
+                }
+                pending_record = versioning::ChangeRecord{
+                    .database_name = Unescape(parts[1]),
+                    .table_name = Unescape(parts[2]),
+                    .operation = Unescape(parts[3]),
+                    .timestamp = Unescape(parts[4]),
+                    .snapshot_rows = {},
+                };
+                continue;
+            }
+            if (parts[0] == "SNAPSHOT_ROW") {
+                if (!pending_record.has_value()) {
+                    return false;
+                }
+                common::RowData row;
+                for (std::size_t index = 1; index < parts.size(); ++index) {
+                    const auto decoded_value = TryDecodeValue(parts[index]);
+                    if (!decoded_value.has_value()) {
+                        return false;
+                    }
+                    row.values.push_back(*decoded_value);
+                }
+                pending_record->snapshot_rows.push_back(std::move(row));
+                continue;
+            }
+            if (parts[0] == "CHANGE_END" && parts.size() == 1) {
+                if (!pending_record.has_value()) {
+                    return false;
+                }
+                loaded_records.push_back(std::move(*pending_record));
+                pending_record.reset();
+                continue;
+            }
+            return false;
+        }
+        if (pending_record.has_value()) {
+            return false;
+        }
+        version_store.ReplaceAll(std::move(loaded_records));
         return true;
     }
 

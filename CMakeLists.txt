@@ -69,3 +69,7 @@ add_test(NAME dbms_persistence COMMAND dbms_persistence)
 add_executable(dbms_revert tests/revert.cpp)
 target_link_libraries(dbms_revert PRIVATE dbms_core)
 add_test(NAME dbms_revert COMMAND dbms_revert)
+
+add_executable(dbms_revert_persistence tests/revert_persistence.cpp)
+target_link_libraries(dbms_revert_persistence PRIVATE dbms_core)
+add_test(NAME dbms_revert_persistence COMMAND dbms_revert_persistence)

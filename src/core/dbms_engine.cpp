@@ -7,7 +7,7 @@ namespace dbms::core {
         : root_path_(std::move(root_path)), catalog_(root_path_),
           execution_(catalog_, runtime_state_, version_store_, string_pool_),
           persistence_(root_path_) {
-        persistence_.Load(runtime_state_);
+        persistence_.Load(runtime_state_, version_store_);
     }
 
     common::Result<execution::QueryResult>
@@ -30,7 +30,7 @@ namespace dbms::core {
         const auto &statement = *plan.value->statement;
         if (!std::holds_alternative<parser::SelectStatement>(statement) &&
             !std::holds_alternative<parser::UseDatabaseStatement>(statement)) {
-            persistence_.Save(runtime_state_);
+            persistence_.Save(runtime_state_, version_store_);
         }
         return execution_result;
     }

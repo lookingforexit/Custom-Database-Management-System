@@ -21,6 +21,9 @@ namespace dbms::versioning {
     class VersionStore {
       public:
         [[nodiscard]] std::string Append(ChangeRecord record);
+        void ReplaceAll(std::vector<ChangeRecord> records);
+        void Clear();
+        [[nodiscard]] const std::vector<ChangeRecord> &AllRecords() const;
         [[nodiscard]] std::vector<ChangeRecord>
         HistoryForTable(const std::string &database_name,
                         const std::string &table_name) const;
@@ -35,7 +38,6 @@ namespace dbms::versioning {
       private:
         [[nodiscard]] static std::string GenerateTimestamp();
         std::vector<ChangeRecord> records_;
-        std::uint64_t monotonic_id_{0};
     };
 
 } // namespace dbms::versioning

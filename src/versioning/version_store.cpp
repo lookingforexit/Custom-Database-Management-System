@@ -15,6 +15,16 @@ namespace dbms::versioning {
         return records_.back().timestamp;
     }
 
+    void VersionStore::ReplaceAll(std::vector<ChangeRecord> records) {
+        records_ = std::move(records);
+    }
+
+    void VersionStore::Clear() { records_.clear(); }
+
+    const std::vector<ChangeRecord> &VersionStore::AllRecords() const {
+        return records_;
+    }
+
     std::vector<ChangeRecord>
     VersionStore::HistoryForTable(const std::string &database_name,
                                   const std::string &table_name) const {
