@@ -44,3 +44,7 @@ enable_testing()
 add_executable(dbms_smoke tests/smoke.cpp)
 target_link_libraries(dbms_smoke PRIVATE dbms_core)
 add_test(NAME dbms_smoke COMMAND dbms_smoke)
+
+add_executable(dbms_parser_validation tests/parser_validation.cpp)
+target_link_libraries(dbms_parser_validation PRIVATE dbms_core)
+add_test(NAME dbms_parser_validation COMMAND dbms_parser_validation)

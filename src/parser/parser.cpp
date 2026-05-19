@@ -2,9 +2,11 @@
 
 #include <cctype>
 #include <stdexcept>
+#include <unordered_set>
 
 #include "common/error.hpp"
 #include "common/result.hpp"
+#include "common/types.hpp"
 #include "parser/lexer.hpp"
 
 // this file implements sql parsing for ddl, dml, filters, and aggregates.
@@ -171,6 +173,12 @@ namespace dbms::parser {
                     .value = std::make_unique<Expression>(std::move(left)),
                     .pattern = std::make_unique<Expression>(std::move(pattern)),
                 }};
+            }
+
+            const std::string next_upper = ToUpper(c.Peek());
+            if (!c.Has() || c.Peek() == ")" || c.Peek() == ";" ||
+                next_upper == "AND" || next_upper == "OR") {
+                return left;
             }
 
             const std::string op = c.Take();
@@ -375,6 +383,104 @@ namespace dbms::parser {
             return stmt;
         }
 
+        void ValidateCreateTable(const CreateTableStatement &stmt) {
+            if (stmt.columns.empty()) {
+                throw std::runtime_error("CREATE TABLE must define columns");
+            }
+
+            std::unordered_set<std::string> names;
+            for (const auto &column : stmt.columns) {
+                if (!names.insert(column.name).second) {
+                    throw std::runtime_error("duplicate column name: " +
+                                             column.name);
+                }
+                if (column.default_value.has_value()) {
+                    if (!common::CanAssignToType(*column.default_value,
+                                                 column.type, !column.not_null)) {
+                        throw std::runtime_error(
+                            "DEFAULT value type mismatch for column: " +
+                            column.name);
+                    }
+                }
+            }
+        }
+
+        void ValidateInsert(const InsertStatement &stmt) {
+            if (stmt.column_names.empty()) {
+                throw std::runtime_error(
+                    "INSERT must specify at least one target column");
+            }
+            if (stmt.rows.empty()) {
+                throw std::runtime_error("INSERT must include at least one row");
+            }
+
+            std::unordered_set<std::string> names;
+            for (const auto &name : stmt.column_names) {
+                if (!names.insert(name).second) {
+                    throw std::runtime_error("duplicate INSERT column: " + name);
+                }
+            }
+
+            for (const auto &row : stmt.rows) {
+                if (row.size() != stmt.column_names.size()) {
+                    throw std::runtime_error(
+                        "INSERT row value count does not match column count");
+                }
+            }
+        }
+
+        void ValidateUpdate(const UpdateStatement &stmt) {
+            if (stmt.assignments.empty()) {
+                throw std::runtime_error("UPDATE must define assignments");
+            }
+
+            std::unordered_set<std::string> names;
+            for (const auto &assignment : stmt.assignments) {
+                if (!names.insert(assignment.column_name).second) {
+                    throw std::runtime_error("duplicate UPDATE assignment: " +
+                                             assignment.column_name);
+                }
+            }
+        }
+
+        void ValidateSelect(const SelectStatement &stmt) {
+            if (stmt.items.empty()) {
+                throw std::runtime_error("SELECT item list is empty");
+            }
+            if (stmt.items.size() > 1) {
+                for (const auto &item : stmt.items) {
+                    if (item.is_wildcard) {
+                        throw std::runtime_error(
+                            "SELECT * cannot be combined with other items");
+                    }
+                }
+            }
+        }
+
+        void ValidateStatement(const Statement &stmt) {
+            if (const auto *create_table =
+                    std::get_if<CreateTableStatement>(&stmt);
+                create_table != nullptr) {
+                ValidateCreateTable(*create_table);
+                return;
+            }
+            if (const auto *insert = std::get_if<InsertStatement>(&stmt);
+                insert != nullptr) {
+                ValidateInsert(*insert);
+                return;
+            }
+            if (const auto *update = std::get_if<UpdateStatement>(&stmt);
+                update != nullptr) {
+                ValidateUpdate(*update);
+                return;
+            }
+            if (const auto *select = std::get_if<SelectStatement>(&stmt);
+                select != nullptr) {
+                ValidateSelect(*select);
+                return;
+            }
+        }
+
     } // namespace
 
     common::Result<Statement> Parser::Parse(const std::string &sql) const {
@@ -413,6 +519,7 @@ namespace dbms::parser {
                         common::ErrorCode::kParseError,
                         "unexpected tokens after semicolon");
                 }
+                ValidateStatement(stmt);
                 return common::MakeSuccess(std::move(stmt));
             }
             if (c.Has()) {
@@ -420,6 +527,7 @@ namespace dbms::parser {
                     common::ErrorCode::kParseError,
                     "unexpected trailing tokens");
             }
+            ValidateStatement(stmt);
             return common::MakeSuccess(std::move(stmt));
         } catch (const std::exception &e) {
             return common::MakeError<Statement>(common::ErrorCode::kParseError,
