@@ -128,3 +128,7 @@ add_test(NAME dbms_async_job_queue COMMAND dbms_async_job_queue)
 add_executable(dbms_access_logs tests/access_logs.cpp)
 target_link_libraries(dbms_access_logs PRIVATE dbms_core)
 add_test(NAME dbms_access_logs COMMAND dbms_access_logs)
+
+add_executable(dbms_telemetry_realtime tests/telemetry_realtime.cpp)
+target_link_libraries(dbms_telemetry_realtime PRIVATE dbms_core)
+add_test(NAME dbms_telemetry_realtime COMMAND dbms_telemetry_realtime)

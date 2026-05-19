@@ -1,7 +1,10 @@
 #pragma once
 
 // this file defines runtime telemetry snapshots and collection interfaces.
+#include <chrono>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 
 namespace dbms::runtime {
 
@@ -18,6 +21,18 @@ namespace dbms::runtime {
         void RecordSuccess(double latency_ms);
         void RecordFailure(double latency_ms);
         [[nodiscard]] TelemetrySnapshot Snapshot() const;
+
+      private:
+        struct RequestEvent {
+            std::chrono::steady_clock::time_point time;
+            double latency_ms{0.0};
+            bool failed{false};
+        };
+
+        void PruneLocked(std::chrono::steady_clock::time_point now) const;
+
+        mutable std::mutex mutex_;
+        mutable std::deque<RequestEvent> events_;
     };
 
 } // namespace dbms::runtime

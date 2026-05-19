@@ -141,6 +141,11 @@ namespace dbms::server {
             const auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         finished_at - started_at)
                                         .count();
+            if (response.status_code >= 400) {
+                telemetry_.RecordFailure(static_cast<double>(latency_ms));
+            } else {
+                telemetry_.RecordSuccess(static_cast<double>(latency_ms));
+            }
             WriteAccessLog(request, response, latency_ms);
             return response;
         };
@@ -152,6 +157,10 @@ namespace dbms::server {
         network::ResponseEnvelope async_response;
         if (ParseAsyncCommand(request, async_response)) {
             return finalize(async_response);
+        }
+        network::ResponseEnvelope telemetry_response;
+        if (ParseTelemetryCommand(request.payload, telemetry_response)) {
+            return finalize(telemetry_response);
         }
 
         auto parsed = parser_.Parse(request.payload);
@@ -375,6 +384,30 @@ namespace dbms::server {
 
         response = {.status_code = 400,
                     .payload = "type=VALIDATION_ERROR code=3 message=invalid ASYNC command sql=\"\""};
+        return true;
+    }
+
+    bool EntrypointServer::ParseTelemetryCommand(
+        const std::string &payload, network::ResponseEnvelope &response) {
+        const auto tokens = SplitWhitespace(payload);
+        if (tokens.size() < 2 || ToUpper(tokens[0]) != "TELEMETRY") {
+            return false;
+        }
+        const auto command = ToUpper(tokens[1]);
+        if (command != "SNAPSHOT") {
+            response = {.status_code = 400,
+                        .payload = "type=VALIDATION_ERROR code=3 message=invalid TELEMETRY command sql=\"\""};
+            return true;
+        }
+
+        const auto snapshot = telemetry_.Snapshot();
+        std::ostringstream output;
+        output << "current_rps=" << snapshot.current_rps
+               << " average_rps_10m=" << snapshot.average_rps_10m
+               << " max_rps_10m=" << snapshot.max_rps_10m
+               << " average_latency_10s_ms=" << snapshot.average_latency_10s_ms
+               << " error_rate_1m=" << snapshot.error_rate_1m;
+        response = {.status_code = 200, .payload = output.str()};
         return true;
     }
 
