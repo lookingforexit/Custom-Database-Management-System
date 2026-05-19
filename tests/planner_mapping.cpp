@@ -121,6 +121,18 @@ int main() {
             BuildPlanOrAbort(planner, "REVERT db1.t \"2026.05.19-10:00:00.000001\";");
         assert(plan.kind == PlanNodeKind::kRevert);
     }
+    {
+        auto plan = BuildPlanOrAbort(planner, "BEGIN;");
+        assert(plan.kind == PlanNodeKind::kBeginTransaction);
+    }
+    {
+        auto plan = BuildPlanOrAbort(planner, "COMMIT;");
+        assert(plan.kind == PlanNodeKind::kCommitTransaction);
+    }
+    {
+        auto plan = BuildPlanOrAbort(planner, "ROLLBACK;");
+        assert(plan.kind == PlanNodeKind::kRollbackTransaction);
+    }
 
     return 0;
 }

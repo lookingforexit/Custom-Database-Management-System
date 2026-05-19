@@ -12,6 +12,7 @@
 #include "session_context.hpp"
 #include "storage/string_pool.hpp"
 #include "versioning/version_store.hpp"
+#include <unordered_map>
 
 namespace dbms::core {
 
@@ -27,8 +28,19 @@ namespace dbms::core {
         ExecuteSql(SessionContext &session, const std::string &sql);
 
       private:
+        struct TransactionContext {
+            RuntimeState working_state;
+            versioning::VersionStore working_version_store;
+        };
+
+        [[nodiscard]] bool IsMutatingStatement(
+            const parser::Statement &statement) const;
+        [[nodiscard]] std::string TransactionKey(
+            const SessionContext &session) const;
+
         std::string root_path_;
         RuntimeState runtime_state_;
+        std::unordered_map<std::string, TransactionContext> transactions_;
 
         parser::Parser parser_;
         planner::Planner planner_{&runtime_state_};

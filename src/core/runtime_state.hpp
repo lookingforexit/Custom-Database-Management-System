@@ -28,4 +28,7 @@ namespace dbms::core {
         std::unordered_map<std::string, DatabaseRuntime> databases;
     };
 
+    [[nodiscard]] TableRuntime CloneTableRuntime(const TableRuntime &source);
+    [[nodiscard]] RuntimeState CloneRuntimeState(const RuntimeState &source);
+
 } // namespace dbms::core

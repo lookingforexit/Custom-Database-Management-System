@@ -24,6 +24,9 @@ namespace dbms::planner {
         kUpdate,
         kDelete,
         kRevert,
+        kBeginTransaction,
+        kCommitTransaction,
+        kRollbackTransaction,
         kRemoteShardDispatch,
     };
 

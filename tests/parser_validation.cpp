@@ -76,6 +76,9 @@ int main() {
     ExpectParseOk(parser, "REVERT t EXACT \"2026.05.20-12:00:00.000001\";");
     ExpectParseOk(parser,
                   "REVERT t AT_OR_BEFORE \"2026.05.20-12:00:00.000001\";");
+    ExpectParseOk(parser, "BEGIN;");
+    ExpectParseOk(parser, "COMMIT;");
+    ExpectParseOk(parser, "ROLLBACK;");
 
     // AST shape checks: AND has higher precedence than OR.
     {

@@ -16,6 +16,71 @@ namespace dbms::core {
         if (!parsed.ok()) {
             return {.value = std::nullopt, .error = parsed.error};
         }
+        const auto &statement = *parsed.value;
+        const auto transaction_key = TransactionKey(session);
+
+        if (std::holds_alternative<parser::BeginTransactionStatement>(
+                statement)) {
+            if (transactions_.contains(transaction_key)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kValidationError,
+                    "transaction already active for session");
+            }
+            TransactionContext context;
+            context.working_state = CloneRuntimeState(runtime_state_);
+            context.working_version_store = version_store_;
+            transactions_.emplace(transaction_key, std::move(context));
+
+            execution::QueryResult result;
+            result.message = "transaction started";
+            return common::MakeSuccess(std::move(result));
+        }
+
+        if (std::holds_alternative<parser::CommitTransactionStatement>(
+                statement)) {
+            auto transaction_it = transactions_.find(transaction_key);
+            if (transaction_it == transactions_.end()) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kValidationError,
+                    "no active transaction for session");
+            }
+            runtime_state_ = std::move(transaction_it->second.working_state);
+            version_store_ =
+                std::move(transaction_it->second.working_version_store);
+            transactions_.erase(transaction_it);
+            persistence_.Save(runtime_state_, version_store_);
+
+            execution::QueryResult result;
+            result.message = "transaction committed";
+            return common::MakeSuccess(std::move(result));
+        }
+
+        if (std::holds_alternative<parser::RollbackTransactionStatement>(
+                statement)) {
+            auto transaction_it = transactions_.find(transaction_key);
+            if (transaction_it == transactions_.end()) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kValidationError,
+                    "no active transaction for session");
+            }
+            transactions_.erase(transaction_it);
+            execution::QueryResult result;
+            result.message = "transaction rolled back";
+            return common::MakeSuccess(std::move(result));
+        }
+
+        auto transaction_it = transactions_.find(transaction_key);
+        if (transaction_it != transactions_.end()) {
+            planner::Planner transactional_planner(&transaction_it->second.working_state);
+            auto plan = transactional_planner.BuildPlan(std::move(*parsed.value));
+            if (!plan.ok()) {
+                return {.value = std::nullopt, .error = plan.error};
+            }
+            execution::ExecutionEngine transactional_execution(
+                catalog_, transaction_it->second.working_state,
+                transaction_it->second.working_version_store, string_pool_);
+            return transactional_execution.Execute(session, *plan.value);
+        }
 
         auto plan = planner_.BuildPlan(std::move(*parsed.value));
         if (!plan.ok()) {
@@ -27,9 +92,7 @@ namespace dbms::core {
             return execution_result;
         }
 
-        const auto &statement = *plan.value->statement;
-        if (!std::holds_alternative<parser::SelectStatement>(statement) &&
-            !std::holds_alternative<parser::UseDatabaseStatement>(statement)) {
+        if (IsMutatingStatement(*plan.value->statement)) {
             persistence_.Save(runtime_state_, version_store_);
         }
         return execution_result;
@@ -42,5 +105,22 @@ namespace dbms::core {
     }
 
     catalog::Catalog &DbmsEngine::catalog() { return catalog_; }
+
+    bool DbmsEngine::IsMutatingStatement(
+        const parser::Statement &statement) const {
+        if (std::holds_alternative<parser::SelectStatement>(statement) ||
+            std::holds_alternative<parser::UseDatabaseStatement>(statement)) {
+            return false;
+        }
+        return true;
+    }
+
+    std::string DbmsEngine::TransactionKey(
+        const SessionContext &session) const {
+        if (!session.client_id.empty()) {
+            return session.client_id;
+        }
+        return "__default_session__";
+    }
 
 } // namespace dbms::core

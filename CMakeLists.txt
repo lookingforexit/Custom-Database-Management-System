@@ -12,6 +12,7 @@ add_library(dbms_core
     src/catalog/schema.cpp
     src/common/types.cpp
     src/core/dbms_engine.cpp
+    src/core/runtime_state.cpp
     src/core/runtime_persistence.cpp
     src/execution/execution_engine.cpp
     src/index/b_star_plus_tree.cpp
@@ -77,3 +78,7 @@ add_test(NAME dbms_revert_persistence COMMAND dbms_revert_persistence)
 add_executable(dbms_revert_requirements tests/revert_requirements.cpp)
 target_link_libraries(dbms_revert_requirements PRIVATE dbms_core)
 add_test(NAME dbms_revert_requirements COMMAND dbms_revert_requirements)
+
+add_executable(dbms_transactions tests/transactions.cpp)
+target_link_libraries(dbms_transactions PRIVATE dbms_core)
+add_test(NAME dbms_transactions COMMAND dbms_transactions)

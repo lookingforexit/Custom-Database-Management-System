@@ -165,6 +165,10 @@ namespace dbms::parser {
         RevertMode mode{RevertMode::kAtOrBefore};
     };
 
+    struct BeginTransactionStatement {};
+    struct CommitTransactionStatement {};
+    struct RollbackTransactionStatement {};
+
     struct UnknownStatement {
         std::string raw_sql;
     };
@@ -174,6 +178,7 @@ namespace dbms::parser {
                      DropDatabaseStatement, UseDatabaseStatement,
                      CreateTableStatement, DropTableStatement, InsertStatement,
                      UpdateStatement, DeleteStatement, SelectStatement,
-                     RevertStatement>;
+                     RevertStatement, BeginTransactionStatement,
+                     CommitTransactionStatement, RollbackTransactionStatement>;
 
 } // namespace dbms::parser

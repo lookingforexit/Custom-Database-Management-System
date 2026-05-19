@@ -258,6 +258,27 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
+        if (std::holds_alternative<parser::BeginTransactionStatement>(
+                statement_ref)) {
+            node.kind = PlanNodeKind::kBeginTransaction;
+            node.detail = "begin transaction";
+            return common::MakeSuccess(std::move(node));
+        }
+
+        if (std::holds_alternative<parser::CommitTransactionStatement>(
+                statement_ref)) {
+            node.kind = PlanNodeKind::kCommitTransaction;
+            node.detail = "commit transaction";
+            return common::MakeSuccess(std::move(node));
+        }
+
+        if (std::holds_alternative<parser::RollbackTransactionStatement>(
+                statement_ref)) {
+            node.kind = PlanNodeKind::kRollbackTransaction;
+            node.detail = "rollback transaction";
+            return common::MakeSuccess(std::move(node));
+        }
+
         if (std::holds_alternative<parser::UnknownStatement>(statement_ref)) {
             return common::MakeError<PlanNode>(
                 common::ErrorCode::kParseError,
