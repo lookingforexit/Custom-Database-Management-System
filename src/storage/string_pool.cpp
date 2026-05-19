@@ -20,4 +20,6 @@ namespace dbms::storage {
         return values_.at(id);
     }
 
+    std::size_t StringPool::UniqueCount() const { return values_.size(); }
+
 } // namespace dbms::storage

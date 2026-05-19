@@ -139,6 +139,17 @@ namespace dbms::execution {
             return common::MakeSuccess(true);
         }
 
+        void InternStringValues(common::RowData &row,
+                                storage::StringPool &string_pool) {
+            for (auto &value : row.values) {
+                if (!std::holds_alternative<std::string>(value)) {
+                    continue;
+                }
+                const auto interned_id = string_pool.Intern(std::get<std::string>(value));
+                value = string_pool.Resolve(interned_id);
+            }
+        }
+
         void RecordTableSnapshot(versioning::VersionStore &version_store,
                                  const std::string &database_name,
                                  const core::TableRuntime &table_runtime,
@@ -671,6 +682,7 @@ namespace dbms::execution {
                     }
                     row.values[input_to_schema[i]] = literal->value;
                 }
+                InternStringValues(row, string_pool_);
 
                 auto row_validation = ValidateRowAgainstSchema(row, table.schema);
                 if (!row_validation.ok()) {
@@ -775,6 +787,7 @@ namespace dbms::execution {
                     }
                     row.values[*column_index] = *value_result.value;
                 }
+                InternStringValues(row, string_pool_);
 
                 auto row_validation =
                     ValidateRowAgainstSchema(row, table_runtime.schema);

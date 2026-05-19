@@ -22,6 +22,7 @@ namespace dbms::core {
 
         [[nodiscard]] RuntimeState &runtime_state();
         [[nodiscard]] versioning::VersionStore &version_store();
+        [[nodiscard]] storage::StringPool &string_pool();
         [[nodiscard]] catalog::Catalog &catalog();
 
         [[nodiscard]] common::Result<execution::QueryResult>

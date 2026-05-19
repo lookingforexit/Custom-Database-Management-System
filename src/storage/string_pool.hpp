@@ -13,6 +13,7 @@ namespace dbms::storage {
       public:
         [[nodiscard]] StringId Intern(const std::string &value);
         [[nodiscard]] const std::string &Resolve(StringId id) const;
+        [[nodiscard]] std::size_t UniqueCount() const;
 
       private:
         std::unordered_map<std::string, StringId> index_;

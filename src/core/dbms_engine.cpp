@@ -109,6 +109,8 @@ namespace dbms::core {
         return version_store_;
     }
 
+    storage::StringPool &DbmsEngine::string_pool() { return string_pool_; }
+
     catalog::Catalog &DbmsEngine::catalog() { return catalog_; }
 
     bool DbmsEngine::IsMutatingStatement(
