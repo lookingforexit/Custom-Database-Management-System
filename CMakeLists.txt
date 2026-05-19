@@ -53,3 +53,11 @@ add_test(NAME dbms_parser_validation COMMAND dbms_parser_validation)
 add_executable(dbms_planner_mapping tests/planner_mapping.cpp)
 target_link_libraries(dbms_planner_mapping PRIVATE dbms_core)
 add_test(NAME dbms_planner_mapping COMMAND dbms_planner_mapping)
+
+add_executable(dbms_bstar_plus_tree tests/bstar_plus_tree.cpp)
+target_link_libraries(dbms_bstar_plus_tree PRIVATE dbms_core)
+add_test(NAME dbms_bstar_plus_tree COMMAND dbms_bstar_plus_tree)
+
+add_executable(dbms_bstar_plus_tree_stress tests/bstar_plus_tree_stress.cpp)
+target_link_libraries(dbms_bstar_plus_tree_stress PRIVATE dbms_core)
+add_test(NAME dbms_bstar_plus_tree_stress COMMAND dbms_bstar_plus_tree_stress)

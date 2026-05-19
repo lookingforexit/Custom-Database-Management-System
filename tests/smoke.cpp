@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 
+#include "common/error.hpp"
 #include "common/types.hpp"
 #include "core/dbms_engine.hpp"
 #include "parser/lexer.hpp"
@@ -36,7 +37,13 @@ int main() {
     dbms::core::SessionContext session;
     session.client_id = "smoke";
 
-    auto result = engine.ExecuteSql(session, "CREATE DATABASE test_db;");
+    auto result = engine.ExecuteSql(session, "DROP DATABASE test_db;");
+    if (!result.ok() &&
+        result.error->code != dbms::common::ErrorCode::kNotFound) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "CREATE DATABASE test_db;");
     if (!result.ok()) {
         std::cout << "pipeline_error\n";
         return 1;
