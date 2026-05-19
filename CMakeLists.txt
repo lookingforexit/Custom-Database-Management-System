@@ -99,3 +99,7 @@ add_test(NAME dbms_index_consistency COMMAND dbms_index_consistency)
 add_executable(dbms_error_contract tests/error_contract.cpp)
 target_link_libraries(dbms_error_contract PRIVATE dbms_core)
 add_test(NAME dbms_error_contract COMMAND dbms_error_contract)
+
+add_executable(dbms_core_integration_extended tests/core_integration_extended.cpp)
+target_link_libraries(dbms_core_integration_extended PRIVATE dbms_core)
+add_test(NAME dbms_core_integration_extended COMMAND dbms_core_integration_extended)
