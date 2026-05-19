@@ -50,6 +50,12 @@ int main() {
     if (!ExpectOk(engine.ExecuteSql(session_a, "BEGIN;"), "begin_a")) {
         return 1;
     }
+    auto nested_begin = engine.ExecuteSql(session_a, "BEGIN;");
+    if (nested_begin.ok() || !nested_begin.error.has_value() ||
+        nested_begin.error->code != dbms::common::ErrorCode::kValidationError) {
+        std::cout << "tx_error: nested_begin\n";
+        return 1;
+    }
     auto ddl_in_tx = engine.ExecuteSql(
         session_a, "CREATE TABLE should_fail (id INT INDEXED);");
     if (ddl_in_tx.ok() ||
@@ -73,6 +79,12 @@ int main() {
         return 1;
     }
     if (!ExpectOk(engine.ExecuteSql(session_a, "ROLLBACK;"), "rollback_a")) {
+        return 1;
+    }
+    auto second_rollback = engine.ExecuteSql(session_a, "ROLLBACK;");
+    if (second_rollback.ok() || !second_rollback.error.has_value() ||
+        second_rollback.error->code != dbms::common::ErrorCode::kValidationError) {
+        std::cout << "tx_error: second_rollback\n";
         return 1;
     }
     auto after_rollback = engine.ExecuteSql(session_a, "SELECT * FROM t;");
@@ -108,6 +120,13 @@ int main() {
     if (invalid_commit.ok() ||
         invalid_commit.error->code != dbms::common::ErrorCode::kValidationError) {
         std::cout << "tx_error: invalid_commit\n";
+        return 1;
+    }
+    auto commit_other_session = engine.ExecuteSql(session_b, "COMMIT;");
+    if (commit_other_session.ok() || !commit_other_session.error.has_value() ||
+        commit_other_session.error->code !=
+            dbms::common::ErrorCode::kValidationError) {
+        std::cout << "tx_error: commit_other_session\n";
         return 1;
     }
 

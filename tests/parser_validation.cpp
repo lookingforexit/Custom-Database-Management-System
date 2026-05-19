@@ -56,15 +56,23 @@ int main() {
     ExpectParseError(parser, "INSERT INTO t (id, id) VALUE (1, 2);");
     ExpectParseError(parser, "INSERT INTO t (id, name) VALUE (1);");
     ExpectParseError(parser, "INSERT INTO t (id) VALUES;");
+    ExpectParseError(parser, "INSERT INTO t (id) VALUE ;");
+    ExpectParseError(parser, "INSERT INTO t (id) VALUE (1");
+    ExpectParseOk(parser, "INSERT INTO t (id) VALUE (-1);");
 
     // UPDATE semantic checks.
     ExpectParseError(parser, "UPDATE t SET;");
     ExpectParseError(parser, "UPDATE t SET id = 1, id = 2;");
+    ExpectParseError(parser, "UPDATE t SET id = ;");
+    ExpectParseOk(parser, "UPDATE t SET id = -5 WHERE id == 1;");
 
     // SELECT semantic checks.
     ExpectParseError(parser, "SELECT *, id FROM t;");
     ExpectParseError(parser, "SELECT COUNT(id), id FROM t;");
     ExpectParseError(parser, "SELECT SUM(*) FROM t;");
+    ExpectParseError(parser, "SELECT AVG(*) FROM t;");
+    ExpectParseError(parser, "SELECT id FROM t WHERE (id == 1;");
+    ExpectParseError(parser, "SELECT id FROM t WHERE id BETWEEN 1;");
     ExpectParseError(parser, "SeLeCt id FROM t;");
 
     // Positive controls.
@@ -79,8 +87,11 @@ int main() {
     ExpectParseOk(parser,
                   "REVERT t AT_OR_BEFORE \"2026.05.20-12:00:00.000001\";");
     ExpectParseOk(parser, "BEGIN;");
+    ExpectParseOk(parser, "BEGIN TRANSACTION;");
     ExpectParseOk(parser, "COMMIT;");
+    ExpectParseOk(parser, "COMMIT TRANSACTION;");
     ExpectParseOk(parser, "ROLLBACK;");
+    ExpectParseOk(parser, "ROLLBACK TRANSACTION;");
 
     // AST shape checks: AND has higher precedence than OR.
     {

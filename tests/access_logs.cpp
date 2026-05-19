@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <algorithm>
 
 int main() {
     const std::string root = "./test_data_access_logs";
@@ -35,6 +36,8 @@ int main() {
     if (content.find("status=400") == std::string::npos) return 1;
     if (content.find("sql=\"CLUSTER PING\"") == std::string::npos) return 1;
     if (content.find("sql=\"BROKEN SQL\"") == std::string::npos) return 1;
+    const auto lines = static_cast<int>(std::count(content.begin(), content.end(), '\n'));
+    if (lines < 2) return 1;
 
     std::filesystem::remove_all(root);
     return 0;

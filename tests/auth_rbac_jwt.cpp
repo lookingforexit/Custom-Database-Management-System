@@ -27,7 +27,15 @@ int main() {
     auto response = server.HandleRequest(request);
     if (response.status_code != 200) return 1;
 
+    request.payload = "AUTH REGISTER admin pass admin";
+    response = server.HandleRequest(request);
+    if (response.status_code != 400) return 1;
+
     request.payload = "CREATE DATABASE secdb;";
+    response = server.HandleRequest(request);
+    if (response.status_code != 401) return 1;
+
+    request.payload = "AUTH LOGIN admin wrong";
     response = server.HandleRequest(request);
     if (response.status_code != 401) return 1;
 
@@ -41,6 +49,11 @@ int main() {
     request.payload = "CREATE DATABASE secdb;";
     response = server.HandleRequest(request);
     if (response.status_code != 200) return 1;
+
+    request.jwt_token = "broken.token.value";
+    request.payload = "USE secdb;";
+    response = server.HandleRequest(request);
+    if (response.status_code != 401) return 1;
 
     request.jwt_token.clear();
     request.payload = "AUTH REGISTER reader rpass reader";
@@ -61,6 +74,14 @@ int main() {
     request.payload = "CREATE TABLE t (id INT);";
     response = server.HandleRequest(request);
     if (response.status_code != 403) return 1;
+
+    request.payload = "DROP DATABASE secdb;";
+    response = server.HandleRequest(request);
+    if (response.status_code != 403) return 1;
+
+    request.payload = "TELEMETRY SNAPSHOT";
+    response = server.HandleRequest(request);
+    if (response.status_code == 401 || response.status_code == 403) return 1;
 
     std::filesystem::remove_all(root);
     return 0;

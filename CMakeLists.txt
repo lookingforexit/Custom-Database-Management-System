@@ -148,3 +148,11 @@ add_test(NAME dbms_where_and_or_stress COMMAND dbms_where_and_or_stress)
 add_executable(dbms_aggregate_edge_cases tests/aggregate_edge_cases.cpp)
 target_link_libraries(dbms_aggregate_edge_cases PRIVATE dbms_core)
 add_test(NAME dbms_aggregate_edge_cases COMMAND dbms_aggregate_edge_cases)
+
+add_executable(dbms_parser_edge_cases tests/parser_edge_cases.cpp)
+target_link_libraries(dbms_parser_edge_cases PRIVATE dbms_core)
+add_test(NAME dbms_parser_edge_cases COMMAND dbms_parser_edge_cases)
+
+add_executable(dbms_server_api_edge_cases tests/server_api_edge_cases.cpp)
+target_link_libraries(dbms_server_api_edge_cases PRIVATE dbms_core)
+add_test(NAME dbms_server_api_edge_cases COMMAND dbms_server_api_edge_cases)

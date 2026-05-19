@@ -108,6 +108,52 @@ int main() {
             }
             return 1;
         }
+
+        // Additional edge checks on recovered state.
+        auto missing_row =
+            engine.ExecuteSql(session, "SELECT * FROM users WHERE id == 999;");
+        if (!missing_row.ok() || !missing_row.value->rows.empty()) {
+            std::cout << "persistence_error: missing_row_not_empty\n";
+            return 1;
+        }
+
+        auto count_non_null_age =
+            engine.ExecuteSql(session, "SELECT COUNT(age) FROM users;");
+        if (!count_non_null_age.ok() || count_non_null_age.value->rows.size() != 1 ||
+            !std::holds_alternative<std::int64_t>(
+                count_non_null_age.value->rows[0].values[0]) ||
+            std::get<std::int64_t>(count_non_null_age.value->rows[0].values[0]) !=
+                2) {
+            std::cout << "persistence_error: count_age_mismatch\n";
+            return 1;
+        }
+    }
+
+    // Recovery idempotency: repeated restarts must yield identical answers.
+    for (int restart = 0; restart < 3; ++restart) {
+        dbms::core::DbmsEngine engine(root);
+        dbms::core::SessionContext session;
+        session.client_id = "persist_reader_restart_" + std::to_string(restart);
+        if (!ExpectOk(engine.ExecuteSql(session, "USE persist_db;"),
+                      "use_db_restart")) {
+            return 1;
+        }
+        auto stable = engine.ExecuteSql(
+            session, "SELECT COUNT(*), SUM(age), AVG(age) FROM users;");
+        if (!stable.ok() || stable.value->rows.size() != 1 ||
+            stable.value->rows[0].values.size() != 3) {
+            std::cout << "persistence_error: restart_query_failed\n";
+            return 1;
+        }
+        if (!std::holds_alternative<std::int64_t>(stable.value->rows[0].values[0]) ||
+            !std::holds_alternative<std::int64_t>(stable.value->rows[0].values[1]) ||
+            !std::holds_alternative<std::int64_t>(stable.value->rows[0].values[2]) ||
+            std::get<std::int64_t>(stable.value->rows[0].values[0]) != 2 ||
+            std::get<std::int64_t>(stable.value->rows[0].values[1]) != 55 ||
+            std::get<std::int64_t>(stable.value->rows[0].values[2]) != 27) {
+            std::cout << "persistence_error: restart_aggregate_mismatch\n";
+            return 1;
+        }
     }
 
     std::filesystem::remove_all(root);

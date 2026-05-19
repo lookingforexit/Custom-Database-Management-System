@@ -19,6 +19,12 @@ int main() {
     request.payload = "BROKEN SQL";
     response = server.HandleRequest(request);
     if (response.status_code != 400) return 1;
+    request.payload = "CLUSTER PING";
+    response = server.HandleRequest(request);
+    if (response.status_code != 200) return 1;
+    request.payload = "CLUSTER PING";
+    response = server.HandleRequest(request);
+    if (response.status_code != 200) return 1;
 
     request.payload = "TELEMETRY SNAPSHOT";
     response = server.HandleRequest(request);
@@ -29,6 +35,7 @@ int main() {
     if (response.payload.find("average_latency_10s_ms=") == std::string::npos)
         return 1;
     if (response.payload.find("error_rate_1m=") == std::string::npos) return 1;
+    if (response.payload.find("error_rate_1m=0") != std::string::npos) return 1;
 
     std::filesystem::remove_all(root);
     return 0;
