@@ -2,6 +2,8 @@
 
 // this file routes requests through the dbms engine and preserves session
 // state.
+#include "common/error_contract.hpp"
+
 namespace dbms::server {
 
     EntrypointServer::EntrypointServer(std::string root_path)
@@ -23,7 +25,10 @@ namespace dbms::server {
 
         auto result = engine_.ExecuteSql(session, request.payload);
         if (!result.ok()) {
-            return {.status_code = 400, .payload = "Request failed"};
+            return {
+                .status_code = 400,
+                .payload = common::FormatErrorContract(*result.error, request.payload),
+            };
         }
 
         return {.status_code = 200, .payload = result.value->message};

@@ -10,6 +10,7 @@ add_library(dbms_core
     src/catalog/catalog.cpp
     src/catalog/rbac.cpp
     src/catalog/schema.cpp
+    src/common/error_contract.cpp
     src/common/types.cpp
     src/core/dbms_engine.cpp
     src/core/runtime_state.cpp
@@ -94,3 +95,7 @@ add_test(NAME dbms_cli_batch
 add_executable(dbms_index_consistency tests/index_consistency.cpp)
 target_link_libraries(dbms_index_consistency PRIVATE dbms_core)
 add_test(NAME dbms_index_consistency COMMAND dbms_index_consistency)
+
+add_executable(dbms_error_contract tests/error_contract.cpp)
+target_link_libraries(dbms_error_contract PRIVATE dbms_core)
+add_test(NAME dbms_error_contract COMMAND dbms_error_contract)

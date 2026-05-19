@@ -4,51 +4,10 @@
 #include <vector>
 
 #include "core/dbms_engine.hpp"
+#include "common/error_contract.hpp"
 #include "common/types.hpp"
 
 namespace {
-
-    const char *ErrorCodeName(dbms::common::ErrorCode code) {
-        switch (code) {
-            case dbms::common::ErrorCode::kOk:
-                return "OK";
-            case dbms::common::ErrorCode::kParseError:
-                return "PARSE_ERROR";
-            case dbms::common::ErrorCode::kSemanticError:
-                return "SEMANTIC_ERROR";
-            case dbms::common::ErrorCode::kValidationError:
-                return "VALIDATION_ERROR";
-            case dbms::common::ErrorCode::kStorageError:
-                return "STORAGE_ERROR";
-            case dbms::common::ErrorCode::kAuthorizationError:
-                return "AUTHORIZATION_ERROR";
-            case dbms::common::ErrorCode::kNetworkError:
-                return "NETWORK_ERROR";
-            case dbms::common::ErrorCode::kNotFound:
-                return "NOT_FOUND";
-            case dbms::common::ErrorCode::kAlreadyExists:
-                return "ALREADY_EXISTS";
-            case dbms::common::ErrorCode::kConstraintViolation:
-                return "CONSTRAINT_VIOLATION";
-            case dbms::common::ErrorCode::kTypeMismatch:
-                return "TYPE_MISMATCH";
-            case dbms::common::ErrorCode::kNotImplemented:
-                return "NOT_IMPLEMENTED";
-        }
-        return "UNKNOWN";
-    }
-
-    std::string EscapeJson(const std::string &value) {
-        std::string escaped;
-        escaped.reserve(value.size());
-        for (char ch : value) {
-            if (ch == '"' || ch == '\\') {
-                escaped.push_back('\\');
-            }
-            escaped.push_back(ch);
-        }
-        return escaped;
-    }
 
     std::string ValueToJson(const dbms::common::Value &value) {
         if (std::holds_alternative<std::monostate>(value)) {
@@ -57,7 +16,8 @@ namespace {
         if (std::holds_alternative<std::int64_t>(value)) {
             return std::to_string(std::get<std::int64_t>(value));
         }
-        return "\"" + EscapeJson(std::get<std::string>(value)) + "\"";
+        return "\"" + dbms::common::EscapeJsonText(std::get<std::string>(value)) +
+               "\"";
     }
 
     void PrintSelectJson(const dbms::execution::QueryResult &result) {
@@ -76,7 +36,9 @@ namespace {
                 if (column_index != 0) {
                     std::cout << ", ";
                 }
-                std::cout << "\"" << EscapeJson(result.column_names[column_index])
+                std::cout << "\""
+                          << dbms::common::EscapeJsonText(
+                                 result.column_names[column_index])
                           << "\": " << ValueToJson(row.values[column_index]);
             }
             std::cout << "}";
@@ -129,11 +91,10 @@ namespace {
                         std::size_t statement_index) {
         auto result = engine.ExecuteSql(session, sql);
         if (!result.ok()) {
-            std::cout << "error[" << statement_index << "]: type="
-                      << ErrorCodeName(result.error->code) << " code="
-                      << static_cast<int>(result.error->code)
-                      << " message=" << result.error->message
-                      << " sql=\"" << EscapeJson(sql) << "\"\n";
+            std::cout << "error[" << statement_index
+                      << "]: "
+                      << dbms::common::FormatErrorContract(*result.error, sql)
+                      << "\n";
             return 1;
         }
         if (!result.value->column_names.empty()) {
