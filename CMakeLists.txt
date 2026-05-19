@@ -65,3 +65,7 @@ add_test(NAME dbms_bstar_plus_tree_stress COMMAND dbms_bstar_plus_tree_stress)
 add_executable(dbms_persistence tests/persistence.cpp)
 target_link_libraries(dbms_persistence PRIVATE dbms_core)
 add_test(NAME dbms_persistence COMMAND dbms_persistence)
+
+add_executable(dbms_revert tests/revert.cpp)
+target_link_libraries(dbms_revert PRIVATE dbms_core)
+add_test(NAME dbms_revert COMMAND dbms_revert)

@@ -37,6 +37,10 @@ namespace dbms::core {
 
     RuntimeState &DbmsEngine::runtime_state() { return runtime_state_; }
 
+    versioning::VersionStore &DbmsEngine::version_store() {
+        return version_store_;
+    }
+
     catalog::Catalog &DbmsEngine::catalog() { return catalog_; }
 
 } // namespace dbms::core

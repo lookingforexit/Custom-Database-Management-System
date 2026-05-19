@@ -1,8 +1,12 @@
 #pragma once
 
 // this file defines append-only history storage used by revert support.
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include "common/types.hpp"
 
 namespace dbms::versioning {
 
@@ -11,17 +15,27 @@ namespace dbms::versioning {
         std::string table_name;
         std::string operation;
         std::string timestamp;
+        std::vector<common::RowData> snapshot_rows;
     };
 
     class VersionStore {
       public:
-        void Append(ChangeRecord record);
+        [[nodiscard]] std::string Append(ChangeRecord record);
         [[nodiscard]] std::vector<ChangeRecord>
         HistoryForTable(const std::string &database_name,
                         const std::string &table_name) const;
+        [[nodiscard]] std::optional<ChangeRecord>
+        SnapshotAtOrBefore(const std::string &database_name,
+                           const std::string &table_name,
+                           const std::string &timestamp) const;
+        [[nodiscard]] std::optional<ChangeRecord>
+        LatestSnapshot(const std::string &database_name,
+                       const std::string &table_name) const;
 
       private:
+        [[nodiscard]] static std::string GenerateTimestamp();
         std::vector<ChangeRecord> records_;
+        std::uint64_t monotonic_id_{0};
     };
 
 } // namespace dbms::versioning

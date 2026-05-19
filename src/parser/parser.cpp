@@ -383,6 +383,11 @@ namespace dbms::parser {
             RevertStatement stmt;
             stmt.table_name = ParseQualifiedName(c);
             stmt.timestamp = c.Take();
+            if (stmt.timestamp.size() >= 2 && stmt.timestamp.front() == '"' &&
+                stmt.timestamp.back() == '"') {
+                stmt.timestamp =
+                    stmt.timestamp.substr(1, stmt.timestamp.size() - 2);
+            }
             return stmt;
         }
 

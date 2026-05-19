@@ -20,6 +20,7 @@ namespace dbms::core {
         explicit DbmsEngine(std::string root_path);
 
         [[nodiscard]] RuntimeState &runtime_state();
+        [[nodiscard]] versioning::VersionStore &version_store();
         [[nodiscard]] catalog::Catalog &catalog();
 
         [[nodiscard]] common::Result<execution::QueryResult>
