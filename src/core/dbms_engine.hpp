@@ -35,6 +35,8 @@ namespace dbms::core {
 
         [[nodiscard]] bool IsMutatingStatement(
             const parser::Statement &statement) const;
+        [[nodiscard]] bool IsDdlStatement(
+            const parser::Statement &statement) const;
         [[nodiscard]] std::string TransactionKey(
             const SessionContext &session) const;
 

@@ -50,6 +50,13 @@ int main() {
     if (!ExpectOk(engine.ExecuteSql(session_a, "BEGIN;"), "begin_a")) {
         return 1;
     }
+    auto ddl_in_tx = engine.ExecuteSql(
+        session_a, "CREATE TABLE should_fail (id INT INDEXED);");
+    if (ddl_in_tx.ok() ||
+        ddl_in_tx.error->code != dbms::common::ErrorCode::kValidationError) {
+        std::cout << "tx_error: ddl_in_tx_policy\n";
+        return 1;
+    }
     if (!ExpectOk(engine.ExecuteSql(
                       session_a, "INSERT INTO t (id, name) VALUES (1, \"A\");"),
                   "insert_a_tx")) {

@@ -71,6 +71,11 @@ namespace dbms::core {
 
         auto transaction_it = transactions_.find(transaction_key);
         if (transaction_it != transactions_.end()) {
+            if (IsDdlStatement(statement)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kValidationError,
+                    "DDL statements are not allowed inside an active transaction");
+            }
             planner::Planner transactional_planner(&transaction_it->second.working_state);
             auto plan = transactional_planner.BuildPlan(std::move(*parsed.value));
             if (!plan.ok()) {
@@ -113,6 +118,14 @@ namespace dbms::core {
             return false;
         }
         return true;
+    }
+
+    bool DbmsEngine::IsDdlStatement(
+        const parser::Statement &statement) const {
+        return std::holds_alternative<parser::CreateDatabaseStatement>(statement) ||
+               std::holds_alternative<parser::DropDatabaseStatement>(statement) ||
+               std::holds_alternative<parser::CreateTableStatement>(statement) ||
+               std::holds_alternative<parser::DropTableStatement>(statement);
     }
 
     std::string DbmsEngine::TransactionKey(
