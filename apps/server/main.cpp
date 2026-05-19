@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <chrono>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -110,6 +111,14 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "dbms_server listening on port " << port << "\n";
+    std::thread heartbeat_thread([&server]() {
+        while (true) {
+            (void)server.RunHeartbeatCycle();
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
+    });
+    heartbeat_thread.detach();
+
     while (true) {
         const int client_fd = accept(listen_fd, nullptr, nullptr);
         if (client_fd < 0) {

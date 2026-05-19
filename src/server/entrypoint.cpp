@@ -5,13 +5,16 @@
 #include "common/error_contract.hpp"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <sstream>
+#include <thread>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 namespace dbms::server {
@@ -116,11 +119,18 @@ namespace dbms::server {
         auto &session = GetOrCreateSession(request.client_id);
         session.client_id = request.client_id;
 
-        if (!storage_nodes_.empty()) {
+        std::vector<StorageNodeEndpoint> nodes_snapshot;
+        {
+            std::lock_guard<std::mutex> lock(nodes_mutex_);
+            nodes_snapshot = storage_nodes_;
+        }
+
+        if (!nodes_snapshot.empty()) {
             if (ShouldBroadcast(statement)) {
                 std::string merged_unused;
                 auto broadcast_result =
-                    BroadcastToStorageNodes(request, false, merged_unused);
+                    BroadcastToStorageNodes(nodes_snapshot, request, false,
+                                            merged_unused);
                 if (!broadcast_result.has_value()) {
                     return {.status_code = 502,
                             .payload = "type=NETWORK_ERROR code=6 message=cluster broadcast failed sql=\"\""};
@@ -128,10 +138,11 @@ namespace dbms::server {
                 return *broadcast_result;
             }
 
-            if (IsSelectStatement(statement) && !RouteNodeIndex(statement).has_value()) {
+            if (IsSelectStatement(statement) &&
+                !RouteNodeIndex(statement, nodes_snapshot).has_value()) {
                 std::string merged_json;
                 auto fanout =
-                    BroadcastToStorageNodes(request, true, merged_json);
+                    BroadcastToStorageNodes(nodes_snapshot, request, true, merged_json);
                 if (!fanout.has_value()) {
                     return {.status_code = 502,
                             .payload = "type=NETWORK_ERROR code=6 message=cluster fan-out failed sql=\"\""};
@@ -139,13 +150,13 @@ namespace dbms::server {
                 return {.status_code = 200, .payload = merged_json};
             }
 
-            const auto node_index = RouteNodeIndex(statement);
+            const auto node_index = RouteNodeIndex(statement, nodes_snapshot);
             if (!node_index.has_value()) {
                 return {.status_code = 502,
                         .payload = "type=NETWORK_ERROR code=6 message=unable to route request sql=\"\""};
             }
             auto forwarded =
-                ForwardToStorageNode(storage_nodes_[*node_index], request);
+                ForwardToStorageNode(nodes_snapshot[*node_index], request);
             if (forwarded.has_value()) {
                 return *forwarded;
             }
@@ -175,12 +186,19 @@ namespace dbms::server {
         }
 
         const auto command = ToUpper(tokens[1]);
+        if (command == "PING") {
+            response = {.status_code = 200, .payload = "pong"};
+            return true;
+        }
         if (command == "LIST_NODES") {
             std::ostringstream output;
+            std::lock_guard<std::mutex> lock(nodes_mutex_);
             output << "nodes=" << storage_nodes_.size();
             for (std::size_t index = 0; index < storage_nodes_.size(); ++index) {
                 output << " [" << index << "] " << storage_nodes_[index].host << ":"
-                       << storage_nodes_[index].port;
+                       << storage_nodes_[index].port
+                       << " managed=" << (storage_nodes_[index].managed ? "true" : "false")
+                       << " fail_count=" << storage_nodes_[index].fail_count;
             }
             response = {.status_code = 200, .payload = output.str()};
             return true;
@@ -194,6 +212,8 @@ namespace dbms::server {
                 return true;
             }
             if (command == "ADD_NODE") {
+                const bool managed = tokens.size() >= 4 && ToUpper(tokens[3]) == "MANAGED";
+                std::lock_guard<std::mutex> lock(nodes_mutex_);
                 const auto exists = std::any_of(
                     storage_nodes_.begin(), storage_nodes_.end(),
                     [&](const StorageNodeEndpoint &node) {
@@ -202,11 +222,15 @@ namespace dbms::server {
                     });
                 if (!exists) {
                     storage_nodes_.push_back(
-                        {.host = endpoint->first, .port = endpoint->second});
+                        {.host = endpoint->first,
+                         .port = endpoint->second,
+                         .managed = managed,
+                         .fail_count = 0});
                 }
                 response = {.status_code = 200, .payload = "node added"};
                 return true;
             }
+            std::lock_guard<std::mutex> lock(nodes_mutex_);
             storage_nodes_.erase(
                 std::remove_if(storage_nodes_.begin(), storage_nodes_.end(),
                                [&](const StorageNodeEndpoint &node) {
@@ -224,8 +248,10 @@ namespace dbms::server {
     }
 
     std::optional<std::size_t>
-    EntrypointServer::RouteNodeIndex(const parser::Statement &statement) const {
-        if (storage_nodes_.empty()) {
+    EntrypointServer::RouteNodeIndex(
+        const parser::Statement &statement,
+        const std::vector<StorageNodeEndpoint> &nodes) const {
+        if (nodes.empty()) {
             return std::nullopt;
         }
         if (const auto *select = std::get_if<parser::SelectStatement>(&statement);
@@ -252,7 +278,7 @@ namespace dbms::server {
             return std::nullopt;
         }
         const std::size_t hash_value = std::hash<std::string>{}(*table_name);
-        return hash_value % storage_nodes_.size();
+        return hash_value % nodes.size();
     }
 
     std::optional<std::string>
@@ -356,11 +382,13 @@ namespace dbms::server {
     }
 
     std::optional<network::ResponseEnvelope>
-    EntrypointServer::BroadcastToStorageNodes(const network::RequestEnvelope &request,
+    EntrypointServer::BroadcastToStorageNodes(
+        const std::vector<StorageNodeEndpoint> &nodes,
+        const network::RequestEnvelope &request,
                                               bool collect_json,
                                               std::string &merged_json) const {
         std::vector<std::string> json_parts;
-        for (const auto &node : storage_nodes_) {
+        for (const auto &node : nodes) {
             auto response = ForwardToStorageNode(node, request);
             if (!response.has_value()) {
                 return std::nullopt;
@@ -406,6 +434,72 @@ namespace dbms::server {
         merged << "]";
         merged_json = merged.str();
         return network::ResponseEnvelope{.status_code = 200, .payload = merged_json};
+    }
+
+    bool EntrypointServer::RunHeartbeatCycle() {
+        std::vector<std::size_t> dead_indices;
+        std::vector<StorageNodeEndpoint> nodes_snapshot;
+        {
+            std::lock_guard<std::mutex> lock(nodes_mutex_);
+            nodes_snapshot = storage_nodes_;
+        }
+
+        const network::RequestEnvelope ping_request{
+            .client_id = "__cluster_heartbeat__",
+            .jwt_token = "",
+            .payload = "CLUSTER PING",
+        };
+
+        for (std::size_t index = 0; index < nodes_snapshot.size(); ++index) {
+            auto response = ForwardToStorageNode(nodes_snapshot[index], ping_request);
+            const bool healthy =
+                response.has_value() && response->status_code == 200 &&
+                response->payload == "pong";
+            if (!healthy) {
+                dead_indices.push_back(index);
+            }
+        }
+
+        bool changed = false;
+        std::lock_guard<std::mutex> lock(nodes_mutex_);
+        for (std::size_t index = 0; index < storage_nodes_.size(); ++index) {
+            const bool is_dead = std::find(dead_indices.begin(), dead_indices.end(),
+                                           index) != dead_indices.end();
+            if (!is_dead) {
+                storage_nodes_[index].fail_count = 0;
+                continue;
+            }
+            ++storage_nodes_[index].fail_count;
+            if (storage_nodes_[index].managed && storage_nodes_[index].fail_count >= 3) {
+                if (RestartManagedNode(storage_nodes_[index])) {
+                    storage_nodes_[index].fail_count = 0;
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    bool EntrypointServer::RestartManagedNode(StorageNodeEndpoint &node) const {
+        if (!node.managed) {
+            return false;
+        }
+        if (node.host != "127.0.0.1" && node.host != "localhost") {
+            return false;
+        }
+
+        const pid_t child_pid = fork();
+        if (child_pid < 0) {
+            return false;
+        }
+        if (child_pid == 0) {
+            const std::string port_string = std::to_string(node.port);
+            execlp("dbms_storage_node", "dbms_storage_node", port_string.c_str(),
+                   nullptr);
+            _exit(1);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        return true;
     }
 
     std::optional<network::ResponseEnvelope>
