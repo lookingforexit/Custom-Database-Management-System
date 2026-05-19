@@ -53,14 +53,14 @@ int main() {
         std::cout << "pipeline_error\n";
         return 1;
     }
-    result = engine.ExecuteSql(session,
-                               "CREATE TABLE test (id INT INDEXED, name STRING);");
+    result = engine.ExecuteSql(
+        session, "CREATE TABLE test (id INT INDEXED, score INT, name STRING);");
     if (!result.ok()) {
         std::cout << "pipeline_error\n";
         return 1;
     }
-    result = engine.ExecuteSql(session,
-                               "INSERT INTO test (id, name) VALUES (1, \"Alice\");");
+    result = engine.ExecuteSql(
+        session, "INSERT INTO test (id, score, name) VALUES (1, 10, \"Alice\");");
     if (!result.ok()) {
         std::cout << "pipeline_error\n";
         return 1;
@@ -89,6 +89,44 @@ int main() {
     }
     result = engine.ExecuteSql(session, "SELECT * FROM test;");
     if (!result.ok() || !result.value->rows.empty()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+
+    result = engine.ExecuteSql(
+        session,
+        "INSERT INTO test (id, score, name) VALUES (2, 20, \"A\"), (3, 30, \"B\");");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "UPDATE test SET score = id WHERE id == 2;");
+    if (!result.ok()) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "SELECT score FROM test WHERE id == 2;");
+    if (!result.ok() || result.value->rows.size() != 1 ||
+        !std::holds_alternative<std::int64_t>(result.value->rows[0].values[0]) ||
+        std::get<std::int64_t>(result.value->rows[0].values[0]) != 2) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+
+    result = engine.ExecuteSql(session, "SELECT COUNT(*) AS c FROM test;");
+    if (!result.ok() || result.value->rows.size() != 1 ||
+        !std::holds_alternative<std::int64_t>(result.value->rows[0].values[0]) ||
+        std::get<std::int64_t>(result.value->rows[0].values[0]) != 2) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
+    result = engine.ExecuteSql(session, "SELECT SUM(id), AVG(id) FROM test;");
+    if (!result.ok() || result.value->rows.size() != 1 ||
+        result.value->rows[0].values.size() != 2 ||
+        !std::holds_alternative<std::int64_t>(result.value->rows[0].values[0]) ||
+        !std::holds_alternative<std::int64_t>(result.value->rows[0].values[1]) ||
+        std::get<std::int64_t>(result.value->rows[0].values[0]) != 5 ||
+        std::get<std::int64_t>(result.value->rows[0].values[1]) != 2) {
         std::cout << "pipeline_error\n";
         return 1;
     }

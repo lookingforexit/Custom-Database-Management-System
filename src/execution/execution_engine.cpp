@@ -264,6 +264,27 @@ namespace dbms::execution {
                 "expression is not a scalar value expression");
         }
 
+        common::Result<std::vector<common::RowData>>
+        FilterRows(const std::vector<common::RowData> &rows,
+                   const std::optional<parser::Expression> &where_clause,
+                   const catalog::TableSchema &schema) {
+            std::vector<common::RowData> filtered;
+            for (const auto &row : rows) {
+                if (where_clause.has_value()) {
+                    auto pass = EvaluatePredicate(*where_clause, schema, row);
+                    if (!pass.ok()) {
+                        return common::MakeError<std::vector<common::RowData>>(
+                            pass.error->code, pass.error->message);
+                    }
+                    if (!*pass.value) {
+                        continue;
+                    }
+                }
+                filtered.push_back(row);
+            }
+            return common::MakeSuccess(std::move(filtered));
+        }
+
     } // namespace
 
     ExecutionEngine::ExecutionEngine(catalog::Catalog &catalog,
@@ -558,14 +579,14 @@ namespace dbms::execution {
                             "unknown column in UPDATE: " +
                                 assignment.column_name);
                     }
-                    auto literal = std::get_if<parser::LiteralExpression>(
-                        &assignment.value.node);
-                    if (literal == nullptr) {
+                    auto value_result = EvaluateValueExpression(
+                        assignment.value, table_runtime.schema, row);
+                    if (!value_result.ok()) {
                         return common::MakeError<QueryResult>(
-                            common::ErrorCode::kValidationError,
-                            "UPDATE currently accepts only literal assignments");
+                            value_result.error->code,
+                            value_result.error->message);
                     }
-                    row.values[*column_index] = literal->value;
+                    row.values[*column_index] = *value_result.value;
                 }
 
                 auto row_validation =
@@ -671,17 +692,96 @@ namespace dbms::execution {
 
             const auto &table = table_it->second;
             const auto rows = table.heap->ScanAll();
-            for (const auto &row : rows) {
-                if (select->where.has_value()) {
-                    auto pass = EvaluatePredicate(*select->where, table.schema, row);
-                    if (!pass.ok()) {
-                        return common::MakeError<QueryResult>(pass.error->code,
-                                                              pass.error->message);
+            auto filtered_rows =
+                FilterRows(rows, select->where, table.schema);
+            if (!filtered_rows.ok()) {
+                return common::MakeError<QueryResult>(
+                    filtered_rows.error->code, filtered_rows.error->message);
+            }
+            const bool is_aggregate_query =
+                !select->items.empty() && select->items[0].aggregate.has_value();
+            if (is_aggregate_query) {
+                common::RowData aggregate_row;
+                for (const auto &item : select->items) {
+                    if (!item.aggregate.has_value()) {
+                        return common::MakeError<QueryResult>(
+                            common::ErrorCode::kSemanticError,
+                            "aggregate SELECT cannot contain non-aggregate items");
                     }
-                    if (!*pass.value) {
-                        continue;
+
+                    std::optional<std::size_t> column_index = std::nullopt;
+                    if (item.column_name != "*") {
+                        column_index =
+                            FindColumnIndex(table.schema, item.column_name);
+                        if (!column_index.has_value()) {
+                            return common::MakeError<QueryResult>(
+                                common::ErrorCode::kSemanticError,
+                                "unknown column in SELECT: " + item.column_name);
+                        }
+                    }
+
+                    if (item.alias.has_value()) {
+                        result.column_names.push_back(*item.alias);
+                    } else if (item.column_name == "*") {
+                        result.column_names.push_back("count");
+                    } else {
+                        result.column_names.push_back(item.column_name);
+                    }
+
+                    switch (*item.aggregate) {
+                        case parser::AggregateKind::kCount: {
+                            std::int64_t count = 0;
+                            for (const auto &row : *filtered_rows.value) {
+                                if (item.column_name == "*") {
+                                    ++count;
+                                } else if (!common::IsNull(
+                                               row.values[*column_index])) {
+                                    ++count;
+                                }
+                            }
+                            aggregate_row.values.push_back(count);
+                            break;
+                        }
+                        case parser::AggregateKind::kSum:
+                        case parser::AggregateKind::kAvg: {
+                            std::int64_t sum = 0;
+                            std::int64_t count = 0;
+                            for (const auto &row : *filtered_rows.value) {
+                                const auto &value = row.values[*column_index];
+                                if (common::IsNull(value)) {
+                                    continue;
+                                }
+                                if (common::GetValueType(value) !=
+                                    common::ValueType::kInt64) {
+                                    return common::MakeError<QueryResult>(
+                                        common::ErrorCode::kTypeMismatch,
+                                        "SUM/AVG require INT column values");
+                                }
+                                sum += std::get<std::int64_t>(value);
+                                ++count;
+                            }
+
+                            if (*item.aggregate ==
+                                parser::AggregateKind::kSum) {
+                                aggregate_row.values.push_back(sum);
+                            } else {
+                                if (count == 0) {
+                                    aggregate_row.values.push_back(
+                                        std::monostate{});
+                                } else {
+                                    aggregate_row.values.push_back(sum / count);
+                                }
+                            }
+                            break;
+                        }
                     }
                 }
+                result.rows.push_back(std::move(aggregate_row));
+                result.message = "selected 1 row(s)";
+                return common::MakeSuccess(std::move(result));
+            }
+
+            for (const auto &row : *filtered_rows.value) {
 
                 common::RowData out;
                 if (select->items.size() == 1 && select->items[0].is_wildcard) {
@@ -702,11 +802,6 @@ namespace dbms::execution {
                         }
                     }
                     for (const auto &item : select->items) {
-                        if (item.aggregate.has_value()) {
-                            return common::MakeError<QueryResult>(
-                                common::ErrorCode::kNotImplemented,
-                                "aggregates are not implemented in executor yet");
-                        }
                         auto idx = FindColumnIndex(table.schema, item.column_name);
                         if (!idx.has_value()) {
                             return common::MakeError<QueryResult>(

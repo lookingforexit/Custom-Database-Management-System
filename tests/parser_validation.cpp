@@ -63,6 +63,7 @@ int main() {
 
     // SELECT semantic checks.
     ExpectParseError(parser, "SELECT *, id FROM t;");
+    ExpectParseError(parser, "SELECT COUNT(id), id FROM t;");
 
     // Positive controls.
     ExpectParseOk(parser, "CREATE TABLE t (id INT INDEXED, name STRING);");
@@ -132,6 +133,19 @@ int main() {
         assert(select->items[0].column_name == "score");
         assert(select->items[0].alias.has_value());
         assert(select->items[0].alias.value() == "total");
+    }
+
+    {
+        auto stmt = MustParse(parser, "SELECT COUNT(*) AS c FROM t;");
+        assert(stmt.has_value());
+        const auto *select =
+            std::get_if<dbms::parser::SelectStatement>(&stmt.value());
+        assert(select != nullptr);
+        assert(select->items.size() == 1);
+        assert(select->items[0].aggregate.has_value());
+        assert(select->items[0].aggregate.value() ==
+               dbms::parser::AggregateKind::kCount);
+        assert(select->items[0].column_name == "*");
     }
 
     return 0;

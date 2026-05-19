@@ -312,8 +312,7 @@ namespace dbms::parser {
                 Assignment a;
                 a.column_name = c.TakeIdentifier();
                 c.Expect("=");
-                a.value =
-                    Expression{LiteralExpression{.value = ParseLiteral(c.Take())}};
+                a.value = ParsePrimary(c);
                 stmt.assignments.push_back(std::move(a));
                 if (!c.Match(",")) {
                     break;
@@ -353,7 +352,11 @@ namespace dbms::parser {
                     if (auto agg = ParseAgg(c.Peek()); agg.has_value()) {
                         c.Take();
                         c.Expect("(");
-                        item.column_name = c.TakeIdentifier();
+                        if (c.Match("*")) {
+                            item.column_name = "*";
+                        } else {
+                            item.column_name = c.TakeIdentifier();
+                        }
                         c.Expect(")");
                         item.aggregate = agg;
                     } else {
@@ -447,13 +450,28 @@ namespace dbms::parser {
             if (stmt.items.empty()) {
                 throw std::runtime_error("SELECT item list is empty");
             }
+            bool has_aggregate = false;
+            bool has_non_aggregate = false;
             if (stmt.items.size() > 1) {
                 for (const auto &item : stmt.items) {
                     if (item.is_wildcard) {
                         throw std::runtime_error(
                             "SELECT * cannot be combined with other items");
                     }
+                    if (item.aggregate.has_value()) {
+                        has_aggregate = true;
+                    } else {
+                        has_non_aggregate = true;
+                    }
                 }
+            }
+            if (stmt.items.size() == 1) {
+                has_aggregate = stmt.items[0].aggregate.has_value();
+                has_non_aggregate = !has_aggregate && !stmt.items[0].is_wildcard;
+            }
+            if (has_aggregate && has_non_aggregate) {
+                throw std::runtime_error(
+                    "cannot mix aggregate and non-aggregate select items");
             }
         }
 
