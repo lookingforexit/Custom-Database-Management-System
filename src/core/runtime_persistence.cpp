@@ -18,7 +18,63 @@ namespace dbms::core {
     namespace {
 
         constexpr std::string_view kFormatTag = "FORMAT";
-        constexpr std::string_view kFormatVersion = "1";
+        constexpr std::string_view kFormatVersion = "2";
+
+        bool IsSupportedFormatVersion(const std::string &version) {
+            return version == "1" || version == "2";
+        }
+
+        bool ParseKeyValueToken(const std::string &token, std::string &key,
+                                std::string &value) {
+            const auto position = token.find('=');
+            if (position == std::string::npos || position == 0 ||
+                position + 1 >= token.size()) {
+                return false;
+            }
+            key = token.substr(0, position);
+            value = token.substr(position + 1);
+            return true;
+        }
+
+        std::optional<std::string>
+        FindFieldValue(const std::vector<std::string> &parts,
+                       const std::string &field_name) {
+            for (std::size_t index = 1; index < parts.size(); ++index) {
+                std::string key;
+                std::string value;
+                if (!ParseKeyValueToken(parts[index], key, value)) {
+                    continue;
+                }
+                if (key == field_name) {
+                    return value;
+                }
+            }
+            return std::nullopt;
+        }
+
+        std::string ValueTypeName(common::ValueType type) {
+            switch (type) {
+                case common::ValueType::kNull:
+                    return "NULL";
+                case common::ValueType::kInt64:
+                    return "INT";
+                case common::ValueType::kString:
+                    return "STRING";
+            }
+            return "UNKNOWN";
+        }
+
+        std::string ConstraintName(catalog::ColumnConstraint constraint) {
+            switch (constraint) {
+                case catalog::ColumnConstraint::kNone:
+                    return "NONE";
+                case catalog::ColumnConstraint::kNotNull:
+                    return "NOT_NULL";
+                case catalog::ColumnConstraint::kIndexed:
+                    return "INDEXED";
+            }
+            return "UNKNOWN";
+        }
 
         std::string Escape(std::string value) {
             std::string escaped;
@@ -77,12 +133,12 @@ namespace dbms::core {
 
         std::string EncodeValue(const common::Value &value) {
             if (std::holds_alternative<std::monostate>(value)) {
-                return "N";
+                return "Null";
             }
             if (std::holds_alternative<std::int64_t>(value)) {
-                return "I:" + std::to_string(std::get<std::int64_t>(value));
+                return "Int:" + std::to_string(std::get<std::int64_t>(value));
             }
-            return "S:" + Escape(std::get<std::string>(value));
+            return "String:" + Escape(std::get<std::string>(value));
         }
 
         bool ParseInteger(const std::string &raw, int &value) {
@@ -100,14 +156,18 @@ namespace dbms::core {
         }
 
         std::optional<common::Value> TryDecodeValue(const std::string &encoded) {
-            if (encoded == "N") {
+            if (encoded == "N" || encoded == "Null") {
                 return std::monostate{};
             }
-            if (encoded.rfind("I:", 0) == 0) {
+            if (encoded.rfind("I:", 0) == 0 ||
+                encoded.rfind("Int:", 0) == 0) {
                 try {
+                    const std::size_t prefix_len =
+                        encoded.rfind("Int:", 0) == 0 ? 4 : 2;
                     std::size_t consumed = 0;
-                    const auto parsed = std::stoll(encoded.substr(2), &consumed);
-                    if (consumed != encoded.size() - 2) {
+                    const auto parsed =
+                        std::stoll(encoded.substr(prefix_len), &consumed);
+                    if (consumed != encoded.size() - prefix_len) {
                         return std::nullopt;
                     }
                     return static_cast<std::int64_t>(parsed);
@@ -115,8 +175,11 @@ namespace dbms::core {
                     return std::nullopt;
                 }
             }
-            if (encoded.rfind("S:", 0) == 0) {
-                return Unescape(encoded.substr(2));
+            if (encoded.rfind("S:", 0) == 0 ||
+                encoded.rfind("String:", 0) == 0) {
+                const std::size_t prefix_len =
+                    encoded.rfind("String:", 0) == 0 ? 7 : 2;
+                return Unescape(encoded.substr(prefix_len));
             }
             return std::nullopt;
         }
@@ -164,34 +227,43 @@ namespace dbms::core {
         }
 
         output << kFormatTag << "\t" << kFormatVersion << "\n";
+        output << "# Runtime state dump (human-readable)\n";
+        output << "# Records:\n";
+        output << "# DATABASE\\tname=<db>\n";
+        output << "# TABLE\\tdb=<db>\\tname=<table>\n";
+        output << "# COLUMN\\tdb=<db>\\ttable=<table>\\tname=<column>\\ttype=<INT|STRING|NULL>\\tconstraint=<NONE|NOT_NULL|INDEXED>\\tdefault=<value>\n";
+        output << "# ROW\\tdb=<db>\\ttable=<table>\\tvalue=<...>\\tvalue=<...>\n";
         for (const auto &[database_name, database_runtime] :
              runtime_state.databases) {
-            output << "DB\t" << Escape(database_name) << "\n";
+            output << "DATABASE\tname=" << Escape(database_name) << "\n";
             for (const auto &[table_name, table_runtime] : database_runtime.tables) {
-                output << "TABLE\t" << Escape(database_name) << "\t"
+                output << "# Database: " << Escape(database_name) << "\n";
+                output << "# Table: " << Escape(table_name) << "\n";
+                output << "TABLE\tdb=" << Escape(database_name) << "\tname="
                        << Escape(table_name) << "\n";
                 for (const auto &column : table_runtime.schema.columns) {
-                    output << "COLUMN\t" << Escape(database_name) << "\t"
-                           << Escape(table_name) << "\t" << Escape(column.name)
-                           << "\t" << static_cast<int>(column.type) << "\t"
-                           << static_cast<int>(column.constraint) << "\t";
-                    if (column.default_value.has_value()) {
-                        output << "1\t" << EncodeValue(*column.default_value);
-                    } else {
-                        output << "0\tN";
-                    }
-                    output << "\n";
+                    output << "COLUMN\tdb=" << Escape(database_name)
+                           << "\ttable=" << Escape(table_name)
+                           << "\tname=" << Escape(column.name)
+                           << "\ttype=" << ValueTypeName(column.type)
+                           << "\tconstraint="
+                           << ConstraintName(column.constraint) << "\tdefault="
+                           << (column.default_value.has_value()
+                                   ? EncodeValue(*column.default_value)
+                                   : "Null")
+                           << "\n";
                 }
 
                 const auto rows = table_runtime.heap->ScanAll();
                 for (const auto &row : rows) {
-                    output << "ROW\t" << Escape(database_name) << "\t"
+                    output << "ROW\tdb=" << Escape(database_name) << "\ttable="
                            << Escape(table_name);
                     for (const auto &value : row.values) {
-                        output << "\t" << EncodeValue(value);
+                        output << "\tvalue=" << EncodeValue(value);
                     }
                     output << "\n";
                 }
+                output << "\n";
             }
         }
         output.flush();
@@ -218,19 +290,25 @@ namespace dbms::core {
             return false;
         }
         history_output << kFormatTag << "\t" << kFormatVersion << "\n";
+        history_output << "# Version history dump (human-readable)\n";
+        history_output << "# Records:\n";
+        history_output << "# CHANGE\\tdb=<db>\\ttable=<table>\\toperation=<op>\\ttimestamp=<ts>\n";
+        history_output << "# SNAPSHOT_ROW\\tvalue=<...>\\tvalue=<...>\n";
+        history_output << "# CHANGE_END\n";
         for (const auto &record : version_store.AllRecords()) {
-            history_output << "CHANGE\t" << Escape(record.database_name) << "\t"
-                           << Escape(record.table_name) << "\t"
-                           << Escape(record.operation) << "\t"
-                           << Escape(record.timestamp) << "\n";
+            history_output << "CHANGE\tdb=" << Escape(record.database_name)
+                           << "\ttable=" << Escape(record.table_name)
+                           << "\toperation=" << Escape(record.operation)
+                           << "\ttimestamp=" << Escape(record.timestamp) << "\n";
             for (const auto &row : record.snapshot_rows) {
                 history_output << "SNAPSHOT_ROW";
                 for (const auto &value : row.values) {
-                    history_output << "\t" << EncodeValue(value);
+                    history_output << "\tvalue=" << EncodeValue(value);
                 }
                 history_output << "\n";
             }
             history_output << "CHANGE_END\n";
+            history_output << "\n";
         }
         history_output.flush();
         if (!history_output.good()) {
@@ -264,6 +342,9 @@ namespace dbms::core {
             if (line.empty()) {
                 continue;
             }
+            if (line.front() == '#') {
+                continue;
+            }
             const auto parts = SplitByTab(line);
             if (parts.empty()) {
                 continue;
@@ -272,11 +353,24 @@ namespace dbms::core {
             if (!format_checked) {
                 format_checked = true;
                 if (parts[0] == kFormatTag) {
-                    if (parts.size() != 2 || parts[1] != kFormatVersion) {
+                    if (parts.size() != 2 ||
+                        !IsSupportedFormatVersion(parts[1])) {
                         return false;
                     }
                     continue;
                 }
+            }
+
+            if (parts[0] == "DATABASE") {
+                const auto database_name_field = FindFieldValue(parts, "name");
+                if (!database_name_field.has_value()) {
+                    return false;
+                }
+                const std::string database_name = Unescape(*database_name_field);
+                runtime_state.databases.emplace(
+                    database_name,
+                    DatabaseRuntime{.name = database_name, .tables = {}});
+                continue;
             }
 
             if (parts[0] == "DB" && parts.size() >= 2) {
@@ -287,9 +381,23 @@ namespace dbms::core {
                 continue;
             }
 
-            if (parts[0] == "TABLE" && parts.size() >= 3) {
-                const std::string database_name = Unescape(parts[1]);
-                const std::string table_name = Unescape(parts[2]);
+            if (parts[0] == "TABLE") {
+                std::optional<std::string> database_name_field =
+                    FindFieldValue(parts, "db");
+                std::optional<std::string> table_name_field =
+                    FindFieldValue(parts, "name");
+                std::string database_name;
+                std::string table_name;
+                if (database_name_field.has_value() &&
+                    table_name_field.has_value()) {
+                    database_name = Unescape(*database_name_field);
+                    table_name = Unescape(*table_name_field);
+                } else if (parts.size() >= 3) {
+                    database_name = Unescape(parts[1]);
+                    table_name = Unescape(parts[2]);
+                } else {
+                    return false;
+                }
                 auto database_it = runtime_state.databases.find(database_name);
                 if (database_it == runtime_state.databases.end()) {
                     runtime_state.databases.emplace(
@@ -308,14 +416,75 @@ namespace dbms::core {
                 continue;
             }
 
-            if (parts[0] == "COLUMN" && parts.size() >= 8) {
-                const std::string database_name = Unescape(parts[1]);
-                const std::string table_name = Unescape(parts[2]);
-                const std::string column_name = Unescape(parts[3]);
+            if (parts[0] == "COLUMN") {
+                std::string database_name;
+                std::string table_name;
+                std::string column_name;
                 int encoded_type = 0;
                 int encoded_constraint = 0;
-                if (!ParseInteger(parts[4], encoded_type) ||
-                    !ParseInteger(parts[5], encoded_constraint)) {
+                std::optional<common::Value> parsed_default = std::nullopt;
+
+                const auto db_field = FindFieldValue(parts, "db");
+                const auto table_field = FindFieldValue(parts, "table");
+                const auto name_field = FindFieldValue(parts, "name");
+                const auto type_field = FindFieldValue(parts, "type");
+                const auto constraint_field = FindFieldValue(parts, "constraint");
+                const auto default_field = FindFieldValue(parts, "default");
+                if (db_field.has_value() && table_field.has_value() &&
+                    name_field.has_value() && type_field.has_value() &&
+                    constraint_field.has_value() && default_field.has_value()) {
+                    database_name = Unescape(*db_field);
+                    table_name = Unescape(*table_field);
+                    column_name = Unescape(*name_field);
+
+                    const auto type_upper = *type_field;
+                    if (type_upper == "INT") {
+                        encoded_type = static_cast<int>(common::ValueType::kInt64);
+                    } else if (type_upper == "STRING") {
+                        encoded_type = static_cast<int>(common::ValueType::kString);
+                    } else if (type_upper == "NULL") {
+                        encoded_type = static_cast<int>(common::ValueType::kNull);
+                    } else {
+                        return false;
+                    }
+
+                    const auto constraint_upper = *constraint_field;
+                    if (constraint_upper == "NONE") {
+                        encoded_constraint =
+                            static_cast<int>(catalog::ColumnConstraint::kNone);
+                    } else if (constraint_upper == "NOT_NULL") {
+                        encoded_constraint = static_cast<int>(
+                            catalog::ColumnConstraint::kNotNull);
+                    } else if (constraint_upper == "INDEXED") {
+                        encoded_constraint = static_cast<int>(
+                            catalog::ColumnConstraint::kIndexed);
+                    } else {
+                        return false;
+                    }
+
+                    const auto decoded_default = TryDecodeValue(*default_field);
+                    if (!decoded_default.has_value()) {
+                        return false;
+                    }
+                    if (!std::holds_alternative<std::monostate>(*decoded_default)) {
+                        parsed_default = *decoded_default;
+                    }
+                } else if (parts.size() >= 8) {
+                    database_name = Unescape(parts[1]);
+                    table_name = Unescape(parts[2]);
+                    column_name = Unescape(parts[3]);
+                    if (!ParseInteger(parts[4], encoded_type) ||
+                        !ParseInteger(parts[5], encoded_constraint)) {
+                        return false;
+                    }
+                    if (parts[6] == "1") {
+                        const auto decoded_default = TryDecodeValue(parts[7]);
+                        if (!decoded_default.has_value()) {
+                            return false;
+                        }
+                        parsed_default = *decoded_default;
+                    }
+                } else {
                     return false;
                 }
                 auto database_it = runtime_state.databases.find(database_name);
@@ -332,12 +501,8 @@ namespace dbms::core {
                 column.type = static_cast<common::ValueType>(encoded_type);
                 column.constraint =
                     static_cast<catalog::ColumnConstraint>(encoded_constraint);
-                if (parts[6] == "1") {
-                    const auto decoded_default = TryDecodeValue(parts[7]);
-                    if (!decoded_default.has_value()) {
-                        return false;
-                    }
-                    column.default_value = *decoded_default;
+                if (parsed_default.has_value()) {
+                    column.default_value = *parsed_default;
                 }
                 table_it->second.schema.columns.push_back(column);
                 if (column.constraint == catalog::ColumnConstraint::kIndexed) {
@@ -356,9 +521,22 @@ namespace dbms::core {
                 continue;
             }
 
-            if (parts[0] == "ROW" && parts.size() >= 3) {
-                const std::string database_name = Unescape(parts[1]);
-                const std::string table_name = Unescape(parts[2]);
+            if (parts[0] == "ROW") {
+                std::string database_name;
+                std::string table_name;
+                std::size_t value_start_index = 3;
+                const auto db_field = FindFieldValue(parts, "db");
+                const auto table_field = FindFieldValue(parts, "table");
+                if (db_field.has_value() && table_field.has_value()) {
+                    database_name = Unescape(*db_field);
+                    table_name = Unescape(*table_field);
+                    value_start_index = 0;
+                } else if (parts.size() >= 3) {
+                    database_name = Unescape(parts[1]);
+                    table_name = Unescape(parts[2]);
+                } else {
+                    return false;
+                }
                 auto database_it = runtime_state.databases.find(database_name);
                 if (database_it == runtime_state.databases.end()) {
                     continue;
@@ -369,8 +547,19 @@ namespace dbms::core {
                 }
 
                 common::RowData row;
-                for (std::size_t index = 3; index < parts.size(); ++index) {
-                    const auto decoded_value = TryDecodeValue(parts[index]);
+                for (std::size_t index = value_start_index; index < parts.size();
+                     ++index) {
+                    std::string encoded_value = parts[index];
+                    if (value_start_index == 0) {
+                        std::string key;
+                        std::string value;
+                        if (!ParseKeyValueToken(parts[index], key, value) ||
+                            key != "value") {
+                            continue;
+                        }
+                        encoded_value = value;
+                    }
+                    const auto decoded_value = TryDecodeValue(encoded_value);
                     if (!decoded_value.has_value()) {
                         return false;
                     }
@@ -412,6 +601,9 @@ namespace dbms::core {
             if (line.empty()) {
                 continue;
             }
+            if (line.front() == '#') {
+                continue;
+            }
             const auto parts = SplitByTab(line);
             if (parts.empty()) {
                 continue;
@@ -420,25 +612,44 @@ namespace dbms::core {
             if (!format_checked) {
                 format_checked = true;
                 if (parts[0] == kFormatTag) {
-                    if (parts.size() != 2 || parts[1] != kFormatVersion) {
+                    if (parts.size() != 2 ||
+                        !IsSupportedFormatVersion(parts[1])) {
                         return false;
                     }
                     continue;
                 }
             }
 
-            if (parts[0] == "CHANGE" && parts.size() == 5) {
+            if (parts[0] == "CHANGE") {
                 if (pending_record.has_value()) {
                     return false;
                 }
-                pending_record = versioning::ChangeRecord{
-                    .database_name = Unescape(parts[1]),
-                    .table_name = Unescape(parts[2]),
-                    .operation = Unescape(parts[3]),
-                    .timestamp = Unescape(parts[4]),
-                    .snapshot_rows = {},
-                };
-                continue;
+                const auto db_field = FindFieldValue(parts, "db");
+                const auto table_field = FindFieldValue(parts, "table");
+                const auto operation_field = FindFieldValue(parts, "operation");
+                const auto timestamp_field = FindFieldValue(parts, "timestamp");
+                if (db_field.has_value() && table_field.has_value() &&
+                    operation_field.has_value() && timestamp_field.has_value()) {
+                    pending_record = versioning::ChangeRecord{
+                        .database_name = Unescape(*db_field),
+                        .table_name = Unescape(*table_field),
+                        .operation = Unescape(*operation_field),
+                        .timestamp = Unescape(*timestamp_field),
+                        .snapshot_rows = {},
+                    };
+                    continue;
+                }
+                if (parts.size() == 5) {
+                    pending_record = versioning::ChangeRecord{
+                        .database_name = Unescape(parts[1]),
+                        .table_name = Unescape(parts[2]),
+                        .operation = Unescape(parts[3]),
+                        .timestamp = Unescape(parts[4]),
+                        .snapshot_rows = {},
+                    };
+                    continue;
+                }
+                return false;
             }
             if (parts[0] == "SNAPSHOT_ROW") {
                 if (!pending_record.has_value()) {
@@ -446,7 +657,14 @@ namespace dbms::core {
                 }
                 common::RowData row;
                 for (std::size_t index = 1; index < parts.size(); ++index) {
-                    const auto decoded_value = TryDecodeValue(parts[index]);
+                    std::string encoded_value = parts[index];
+                    std::string key;
+                    std::string value;
+                    if (ParseKeyValueToken(parts[index], key, value) &&
+                        key == "value") {
+                        encoded_value = value;
+                    }
+                    const auto decoded_value = TryDecodeValue(encoded_value);
                     if (!decoded_value.has_value()) {
                         return false;
                     }

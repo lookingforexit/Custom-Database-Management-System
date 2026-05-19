@@ -96,7 +96,7 @@ int main() {
 
         {
             std::ofstream state(root + "/runtime_state.tsv", std::ios::trunc);
-            state << "FORMAT\t1\n";
+            state << "FORMAT\t2\n";
         }
         {
             std::ofstream history(root + "/version_history.tsv", std::ios::trunc);
@@ -110,7 +110,7 @@ int main() {
 
         {
             std::ofstream history(root + "/version_history.tsv", std::ios::trunc);
-            history << "FORMAT\t1\n";
+            history << "FORMAT\t2\n";
             history << "CHANGE\tdb\tt\tINSERT\t2026.05.20-12:00:00.000001\n";
             history << "SNAPSHOT_ROW\tI:1\tS:A\n";
             // Missing CHANGE_END -> malformed.
