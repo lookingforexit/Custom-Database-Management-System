@@ -11,6 +11,7 @@
 #include "core/dbms_engine.hpp"
 #include "network/protocol.hpp"
 #include "parser/parser.hpp"
+#include "runtime/job_queue.hpp"
 
 namespace dbms::server {
 
@@ -35,6 +36,8 @@ namespace dbms::server {
         core::SessionContext &GetOrCreateSession(const std::string &client_id);
         [[nodiscard]] bool ParseClusterCommand(const std::string &payload,
                                                network::ResponseEnvelope &response);
+        [[nodiscard]] bool ParseAsyncCommand(const network::RequestEnvelope &request,
+                                             network::ResponseEnvelope &response);
         [[nodiscard]] std::optional<std::size_t>
         RouteNodeIndex(const parser::Statement &statement,
                        const std::vector<StorageNodeEndpoint> &nodes) const;
@@ -55,6 +58,7 @@ namespace dbms::server {
 
         core::DbmsEngine engine_;
         parser::Parser parser_;
+        runtime::JobQueue job_queue_;
         std::unordered_map<std::string, core::SessionContext> sessions_;
         std::vector<StorageNodeEndpoint> storage_nodes_;
         mutable std::mutex nodes_mutex_;

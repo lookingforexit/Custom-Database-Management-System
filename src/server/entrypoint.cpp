@@ -3,6 +3,7 @@
 // this file routes requests through the dbms engine and preserves session
 // state.
 #include "common/error_contract.hpp"
+#include "common/uuid.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -90,7 +91,24 @@ namespace dbms::server {
     } // namespace
 
     EntrypointServer::EntrypointServer(std::string root_path)
-        : engine_(std::move(root_path)) {}
+        : engine_(std::move(root_path)) {
+        job_queue_.Start([this](const std::string &sql) -> std::pair<int, std::string> {
+            auto parsed = parser_.Parse(sql);
+            if (!parsed.ok()) {
+                return {400, common::FormatErrorContract(*parsed.error, sql)};
+            }
+
+            auto &session = GetOrCreateSession("__async_worker__");
+            auto result = engine_.ExecuteSql(session, sql);
+            if (!result.ok()) {
+                return {400, common::FormatErrorContract(*result.error, sql)};
+            }
+            if (IsSelectStatement(*parsed.value)) {
+                return {200, QueryResultToJson(*result.value)};
+            }
+            return {200, result.value->message};
+        });
+    }
 
     core::SessionContext &
     EntrypointServer::GetOrCreateSession(const std::string &client_id) {
@@ -106,6 +124,10 @@ namespace dbms::server {
         network::ResponseEnvelope cluster_response;
         if (ParseClusterCommand(request.payload, cluster_response)) {
             return cluster_response;
+        }
+        network::ResponseEnvelope async_response;
+        if (ParseAsyncCommand(request, async_response)) {
+            return async_response;
         }
 
         auto parsed = parser_.Parse(request.payload);
@@ -244,6 +266,63 @@ namespace dbms::server {
 
         response = {.status_code = 400,
                     .payload = "type=VALIDATION_ERROR code=3 message=invalid CLUSTER command sql=\"\""};
+        return true;
+    }
+
+    bool EntrypointServer::ParseAsyncCommand(
+        const network::RequestEnvelope &request, network::ResponseEnvelope &response) {
+        const auto tokens = SplitWhitespace(request.payload);
+        if (tokens.size() < 2 || ToUpper(tokens[0]) != "ASYNC") {
+            return false;
+        }
+        const auto command = ToUpper(tokens[1]);
+
+        if (command == "SUBMIT") {
+            if (tokens.size() < 3) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=missing sql for ASYNC SUBMIT sql=\"\""};
+                return true;
+            }
+            const std::string prefix = "ASYNC SUBMIT ";
+            if (request.payload.size() <= prefix.size()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=missing sql for ASYNC SUBMIT sql=\"\""};
+                return true;
+            }
+            runtime::JobRecord job;
+            job.job_id = common::UuidGenerator::NewGuidV4();
+            job.sql = request.payload.substr(prefix.size());
+            job.status = "QUEUED";
+            job_queue_.Enqueue(job);
+            response = {.status_code = 202, .payload = "job_id=" + job.job_id};
+            return true;
+        }
+
+        if ((command == "STATUS" || command == "RESULT") && tokens.size() >= 3) {
+            const std::string job_id = tokens[2];
+            auto job = job_queue_.Find(job_id);
+            if (!job.has_value()) {
+                response = {.status_code = 404,
+                            .payload = "type=NOT_FOUND code=7 message=job not found sql=\"\""};
+                return true;
+            }
+            if (command == "STATUS") {
+                response = {.status_code = 200,
+                            .payload = "job_id=" + job->job_id + " status=" + job->status};
+                return true;
+            }
+            if (job->status == "QUEUED" || job->status == "RUNNING") {
+                response = {.status_code = 202,
+                            .payload =
+                                "job_id=" + job->job_id + " status=" + job->status};
+                return true;
+            }
+            response = {.status_code = job->result_code, .payload = job->result_payload};
+            return true;
+        }
+
+        response = {.status_code = 400,
+                    .payload = "type=VALIDATION_ERROR code=3 message=invalid ASYNC command sql=\"\""};
         return true;
     }
 

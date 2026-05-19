@@ -11,6 +11,7 @@ add_library(dbms_core
     src/catalog/rbac.cpp
     src/catalog/schema.cpp
     src/common/error_contract.cpp
+    src/common/uuid.cpp
     src/common/types.cpp
     src/core/dbms_engine.cpp
     src/core/runtime_state.cpp
@@ -119,3 +120,7 @@ add_test(NAME dbms_string_interning COMMAND dbms_string_interning)
 add_executable(dbms_cluster_entrypoint tests/cluster_entrypoint.cpp)
 target_link_libraries(dbms_cluster_entrypoint PRIVATE dbms_core)
 add_test(NAME dbms_cluster_entrypoint COMMAND dbms_cluster_entrypoint)
+
+add_executable(dbms_async_job_queue tests/async_job_queue.cpp)
+target_link_libraries(dbms_async_job_queue PRIVATE dbms_core)
+add_test(NAME dbms_async_job_queue COMMAND dbms_async_job_queue)
