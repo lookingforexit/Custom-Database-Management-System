@@ -473,6 +473,16 @@ namespace dbms::parser {
                 throw std::runtime_error(
                     "cannot mix aggregate and non-aggregate select items");
             }
+            for (const auto &item : stmt.items) {
+                if (!item.aggregate.has_value()) {
+                    continue;
+                }
+                if (item.column_name == "*" &&
+                    item.aggregate.value() != AggregateKind::kCount) {
+                    throw std::runtime_error(
+                        "only COUNT supports wildcard argument '*'");
+                }
+            }
         }
 
         void ValidateStatement(const Statement &stmt) {

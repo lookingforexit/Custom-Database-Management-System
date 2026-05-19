@@ -914,6 +914,11 @@ namespace dbms::execution {
                         }
                         case parser::AggregateKind::kSum:
                         case parser::AggregateKind::kAvg: {
+                            if (item.column_name == "*") {
+                                return common::MakeError<QueryResult>(
+                                    common::ErrorCode::kSemanticError,
+                                    "SUM/AVG do not support wildcard '*'");
+                            }
                             std::int64_t sum = 0;
                             std::int64_t count = 0;
                             for (const auto &row : *filtered_rows.value) {

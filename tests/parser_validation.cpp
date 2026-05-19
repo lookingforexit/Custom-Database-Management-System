@@ -64,6 +64,7 @@ int main() {
     // SELECT semantic checks.
     ExpectParseError(parser, "SELECT *, id FROM t;");
     ExpectParseError(parser, "SELECT COUNT(id), id FROM t;");
+    ExpectParseError(parser, "SELECT SUM(*) FROM t;");
 
     // Positive controls.
     ExpectParseOk(parser, "CREATE TABLE t (id INT INDEXED, name STRING);");
