@@ -103,3 +103,7 @@ add_test(NAME dbms_error_contract COMMAND dbms_error_contract)
 add_executable(dbms_core_integration_extended tests/core_integration_extended.cpp)
 target_link_libraries(dbms_core_integration_extended PRIVATE dbms_core)
 add_test(NAME dbms_core_integration_extended COMMAND dbms_core_integration_extended)
+
+add_executable(dbms_index_no_data_duplication tests/index_no_data_duplication.cpp)
+target_link_libraries(dbms_index_no_data_duplication PRIVATE dbms_core)
+add_test(NAME dbms_index_no_data_duplication COMMAND dbms_index_no_data_duplication)
