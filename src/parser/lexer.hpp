@@ -12,7 +12,7 @@ namespace dbms::parser {
 
     class Lexer {
       public:
-        [[nodiscard]] std::vector<Token> Tokenize(const std::string &sql) const;
+        static std::vector<Token> Tokenize(const std::string &sql) ;
     };
 
 } // namespace dbms::parser
