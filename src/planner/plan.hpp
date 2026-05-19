@@ -7,6 +7,11 @@
 namespace dbms::planner {
 
     enum class PlanNodeKind {
+        kCreateDatabase,
+        kDropDatabase,
+        kUseDatabase,
+        kCreateTable,
+        kDropTable,
         kSeqScan,
         kIndexScan,
         kFilter,
