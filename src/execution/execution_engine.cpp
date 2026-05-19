@@ -1038,13 +1038,28 @@ namespace dbms::execution {
             }
 
             std::optional<versioning::ChangeRecord> snapshot;
-            if (revert->timestamp == "LATEST") {
+            if (revert->mode == parser::RevertStatement::RevertMode::kLatest) {
                 snapshot = version_store_.LatestSnapshot(
                     *database_name.value, revert->table_name.object_name);
             } else {
-                snapshot = version_store_.SnapshotAtOrBefore(
-                    *database_name.value, revert->table_name.object_name,
-                    revert->timestamp);
+                static const std::regex timestamp_pattern(
+                    R"(^\d{4}\.\d{2}\.\d{2}-\d{2}:\d{2}:\d{2}\.\d{6}$)");
+                if (!std::regex_match(revert->timestamp, timestamp_pattern)) {
+                    return common::MakeError<QueryResult>(
+                        common::ErrorCode::kValidationError,
+                        "invalid REVERT timestamp format, expected YYYY.MM.DD-HH:MM:SS.ffffff");
+                }
+
+                if (revert->mode ==
+                    parser::RevertStatement::RevertMode::kExact) {
+                    snapshot = version_store_.SnapshotExact(
+                        *database_name.value, revert->table_name.object_name,
+                        revert->timestamp);
+                } else {
+                    snapshot = version_store_.SnapshotAtOrBefore(
+                        *database_name.value, revert->table_name.object_name,
+                        revert->timestamp);
+                }
             }
 
             if (!snapshot.has_value()) {

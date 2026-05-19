@@ -32,6 +32,10 @@ namespace dbms::versioning {
                            const std::string &table_name,
                            const std::string &timestamp) const;
         [[nodiscard]] std::optional<ChangeRecord>
+        SnapshotExact(const std::string &database_name,
+                      const std::string &table_name,
+                      const std::string &timestamp) const;
+        [[nodiscard]] std::optional<ChangeRecord>
         LatestSnapshot(const std::string &database_name,
                        const std::string &table_name) const;
 

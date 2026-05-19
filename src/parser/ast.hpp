@@ -155,8 +155,14 @@ namespace dbms::parser {
     };
 
     struct RevertStatement {
+        enum class RevertMode {
+            kAtOrBefore,
+            kExact,
+            kLatest,
+        };
         QualifiedName table_name;
         std::string timestamp;
+        RevertMode mode{RevertMode::kAtOrBefore};
     };
 
     struct UnknownStatement {

@@ -72,6 +72,10 @@ int main() {
     ExpectParseOk(parser, "UPDATE t SET name = \"X\" WHERE id == 1;");
     ExpectParseOk(parser,
                   "SELECT id FROM t WHERE (id >= 1 AND id < 10) OR id == 15;");
+    ExpectParseOk(parser, "REVERT t LATEST;");
+    ExpectParseOk(parser, "REVERT t EXACT \"2026.05.20-12:00:00.000001\";");
+    ExpectParseOk(parser,
+                  "REVERT t AT_OR_BEFORE \"2026.05.20-12:00:00.000001\";");
 
     // AST shape checks: AND has higher precedence than OR.
     {

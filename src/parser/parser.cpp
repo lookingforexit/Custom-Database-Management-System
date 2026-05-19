@@ -382,6 +382,16 @@ namespace dbms::parser {
         Statement ParseRevert(Cursor &c) {
             RevertStatement stmt;
             stmt.table_name = ParseQualifiedName(c);
+            if (c.MatchKeyword("LATEST")) {
+                stmt.mode = RevertStatement::RevertMode::kLatest;
+                stmt.timestamp = "LATEST";
+                return stmt;
+            }
+            if (c.MatchKeyword("EXACT")) {
+                stmt.mode = RevertStatement::RevertMode::kExact;
+            } else if (c.MatchKeyword("AT_OR_BEFORE")) {
+                stmt.mode = RevertStatement::RevertMode::kAtOrBefore;
+            }
             stmt.timestamp = c.Take();
             if (stmt.timestamp.size() >= 2 && stmt.timestamp.front() == '"' &&
                 stmt.timestamp.back() == '"') {

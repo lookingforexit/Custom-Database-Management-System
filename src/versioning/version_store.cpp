@@ -57,6 +57,19 @@ namespace dbms::versioning {
         return best;
     }
 
+    std::optional<ChangeRecord> VersionStore::SnapshotExact(
+        const std::string &database_name, const std::string &table_name,
+        const std::string &timestamp) const {
+        for (const auto &record : records_) {
+            if (record.database_name == database_name &&
+                record.table_name == table_name &&
+                record.timestamp == timestamp) {
+                return record;
+            }
+        }
+        return std::nullopt;
+    }
+
     std::optional<ChangeRecord>
     VersionStore::LatestSnapshot(const std::string &database_name,
                                  const std::string &table_name) const {
