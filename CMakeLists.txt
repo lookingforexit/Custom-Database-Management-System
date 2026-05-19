@@ -61,3 +61,7 @@ add_test(NAME dbms_bstar_plus_tree COMMAND dbms_bstar_plus_tree)
 add_executable(dbms_bstar_plus_tree_stress tests/bstar_plus_tree_stress.cpp)
 target_link_libraries(dbms_bstar_plus_tree_stress PRIVATE dbms_core)
 add_test(NAME dbms_bstar_plus_tree_stress COMMAND dbms_bstar_plus_tree_stress)
+
+add_executable(dbms_persistence tests/persistence.cpp)
+target_link_libraries(dbms_persistence PRIVATE dbms_core)
+add_test(NAME dbms_persistence COMMAND dbms_persistence)

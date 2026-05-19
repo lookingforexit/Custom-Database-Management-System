@@ -2,8 +2,12 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "catalog/schema.hpp"
@@ -12,6 +16,9 @@
 namespace dbms::core {
 
     namespace {
+
+        constexpr std::string_view kFormatTag = "FORMAT";
+        constexpr std::string_view kFormatVersion = "1";
 
         std::string Escape(std::string value) {
             std::string escaped;
@@ -78,17 +85,58 @@ namespace dbms::core {
             return "S:" + Escape(std::get<std::string>(value));
         }
 
-        common::Value DecodeValue(const std::string &encoded) {
+        bool ParseInteger(const std::string &raw, int &value) {
+            try {
+                std::size_t consumed = 0;
+                const int parsed = std::stoi(raw, &consumed);
+                if (consumed != raw.size()) {
+                    return false;
+                }
+                value = parsed;
+                return true;
+            } catch (...) {
+                return false;
+            }
+        }
+
+        std::optional<common::Value> TryDecodeValue(const std::string &encoded) {
             if (encoded == "N") {
                 return std::monostate{};
             }
             if (encoded.rfind("I:", 0) == 0) {
-                return static_cast<std::int64_t>(std::stoll(encoded.substr(2)));
+                try {
+                    std::size_t consumed = 0;
+                    const auto parsed = std::stoll(encoded.substr(2), &consumed);
+                    if (consumed != encoded.size() - 2) {
+                        return std::nullopt;
+                    }
+                    return static_cast<std::int64_t>(parsed);
+                } catch (...) {
+                    return std::nullopt;
+                }
             }
             if (encoded.rfind("S:", 0) == 0) {
                 return Unescape(encoded.substr(2));
             }
-            return std::monostate{};
+            return std::nullopt;
+        }
+
+        std::string EncodeIndexKeyForType(const common::Value &value,
+                                          common::ValueType type) {
+            if (common::IsNull(value)) {
+                return "N";
+            }
+            if (type == common::ValueType::kInt64) {
+                const auto signed_value = std::get<std::int64_t>(value);
+                const auto ordered_value =
+                    static_cast<std::uint64_t>(signed_value) ^
+                    (1ULL << 63ULL);
+                std::ostringstream stream;
+                stream << "I" << std::hex << std::setw(16) << std::setfill('0')
+                       << ordered_value;
+                return stream.str();
+            }
+            return "S" + std::get<std::string>(value);
         }
 
     } // namespace
@@ -102,11 +150,14 @@ namespace dbms::core {
 
     bool RuntimePersistence::Save(const RuntimeState &runtime_state) const {
         std::filesystem::create_directories(root_path_);
-        std::ofstream output(StateFilePath(), std::ios::trunc);
+        const auto final_path = StateFilePath();
+        const auto temp_path = final_path + ".tmp";
+        std::ofstream output(temp_path, std::ios::trunc);
         if (!output.is_open()) {
             return false;
         }
 
+        output << kFormatTag << "\t" << kFormatVersion << "\n";
         for (const auto &[database_name, database_runtime] :
              runtime_state.databases) {
             output << "DB\t" << Escape(database_name) << "\n";
@@ -137,7 +188,20 @@ namespace dbms::core {
                 }
             }
         }
-        return true;
+        output.flush();
+        if (!output.good()) {
+            return false;
+        }
+        output.close();
+        if (!output.good()) {
+            return false;
+        }
+
+        std::error_code remove_error;
+        std::filesystem::remove(final_path, remove_error);
+        std::error_code rename_error;
+        std::filesystem::rename(temp_path, final_path, rename_error);
+        return !rename_error;
     }
 
     bool RuntimePersistence::Load(RuntimeState &runtime_state) const {
@@ -148,6 +212,7 @@ namespace dbms::core {
 
         runtime_state.databases.clear();
         std::string line;
+        bool format_checked = false;
         while (std::getline(input, line)) {
             if (line.empty()) {
                 continue;
@@ -155,6 +220,16 @@ namespace dbms::core {
             const auto parts = SplitByTab(line);
             if (parts.empty()) {
                 continue;
+            }
+
+            if (!format_checked) {
+                format_checked = true;
+                if (parts[0] == kFormatTag) {
+                    if (parts.size() != 2 || parts[1] != kFormatVersion) {
+                        return false;
+                    }
+                    continue;
+                }
             }
 
             if (parts[0] == "DB" && parts.size() >= 2) {
@@ -190,6 +265,12 @@ namespace dbms::core {
                 const std::string database_name = Unescape(parts[1]);
                 const std::string table_name = Unescape(parts[2]);
                 const std::string column_name = Unescape(parts[3]);
+                int encoded_type = 0;
+                int encoded_constraint = 0;
+                if (!ParseInteger(parts[4], encoded_type) ||
+                    !ParseInteger(parts[5], encoded_constraint)) {
+                    return false;
+                }
                 auto database_it = runtime_state.databases.find(database_name);
                 if (database_it == runtime_state.databases.end()) {
                     continue;
@@ -201,11 +282,15 @@ namespace dbms::core {
 
                 catalog::ColumnDefinition column;
                 column.name = column_name;
-                column.type = static_cast<common::ValueType>(std::stoi(parts[4]));
+                column.type = static_cast<common::ValueType>(encoded_type);
                 column.constraint =
-                    static_cast<catalog::ColumnConstraint>(std::stoi(parts[5]));
+                    static_cast<catalog::ColumnConstraint>(encoded_constraint);
                 if (parts[6] == "1") {
-                    column.default_value = DecodeValue(parts[7]);
+                    const auto decoded_default = TryDecodeValue(parts[7]);
+                    if (!decoded_default.has_value()) {
+                        return false;
+                    }
+                    column.default_value = *decoded_default;
                 }
                 table_it->second.schema.columns.push_back(column);
                 if (column.constraint == catalog::ColumnConstraint::kIndexed) {
@@ -238,7 +323,14 @@ namespace dbms::core {
 
                 common::RowData row;
                 for (std::size_t index = 3; index < parts.size(); ++index) {
-                    row.values.push_back(DecodeValue(parts[index]));
+                    const auto decoded_value = TryDecodeValue(parts[index]);
+                    if (!decoded_value.has_value()) {
+                        return false;
+                    }
+                    row.values.push_back(*decoded_value);
+                }
+                if (row.values.size() != table_it->second.schema.columns.size()) {
+                    return false;
                 }
                 const auto row_id = table_it->second.heap->Insert(row);
                 for (const auto &[column_name, index_tree] :
@@ -249,8 +341,10 @@ namespace dbms::core {
                         if (table_it->second.schema.columns[column_index].name ==
                             column_name) {
                             index_tree->Insert(
-                                common::ValueToString(
-                                    row.values[column_index]),
+                                EncodeIndexKeyForType(
+                                    row.values[column_index],
+                                    table_it->second.schema.columns[column_index]
+                                        .type),
                                 row_id);
                             break;
                         }
