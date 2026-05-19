@@ -86,3 +86,6 @@ add_test(NAME dbms_transactions COMMAND dbms_transactions)
 add_executable(dbms_revert_transactions tests/revert_transactions.cpp)
 target_link_libraries(dbms_revert_transactions PRIVATE dbms_core)
 add_test(NAME dbms_revert_transactions COMMAND dbms_revert_transactions)
+
+add_test(NAME dbms_cli_batch
+    COMMAND dbms_cli ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/basic_batch.sql)

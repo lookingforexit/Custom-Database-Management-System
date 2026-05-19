@@ -65,9 +65,11 @@ int main() {
     ExpectParseError(parser, "SELECT *, id FROM t;");
     ExpectParseError(parser, "SELECT COUNT(id), id FROM t;");
     ExpectParseError(parser, "SELECT SUM(*) FROM t;");
+    ExpectParseError(parser, "SeLeCt id FROM t;");
 
     // Positive controls.
     ExpectParseOk(parser, "CREATE TABLE t (id INT INDEXED, name STRING);");
+    ExpectParseOk(parser, "INSERT INTO t (id, name) VALUE (1, \"A\");");
     ExpectParseOk(parser, "INSERT INTO t (id, name) VALUES (1, \"A\"), (2, \"B\");");
     ExpectParseOk(parser, "UPDATE t SET name = \"X\" WHERE id == 1;");
     ExpectParseOk(parser,

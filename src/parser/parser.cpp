@@ -22,6 +22,19 @@ namespace dbms::parser {
             return s;
         }
 
+        bool HasMixedLetterCase(const std::string &token) {
+            bool has_upper = false;
+            bool has_lower = false;
+            for (char ch : token) {
+                if (std::isupper(static_cast<unsigned char>(ch))) {
+                    has_upper = true;
+                } else if (std::islower(static_cast<unsigned char>(ch))) {
+                    has_lower = true;
+                }
+            }
+            return has_upper && has_lower;
+        }
+
         bool IsIdentifier(const std::string &token) {
             if (token.empty()) {
                 return false;
@@ -65,6 +78,10 @@ namespace dbms::parser {
                 }
                 if (ToUpper(Peek()) != kw) {
                     return false;
+                }
+                if (HasMixedLetterCase(Peek())) {
+                    throw std::runtime_error(
+                        "mixed keyword case is not allowed: " + Peek());
                 }
                 ++pos_;
                 return true;

@@ -112,6 +112,13 @@ int main() {
         std::cout << "pipeline_error\n";
         return 1;
     }
+    result = engine.ExecuteSql(session, "SELECT id FROM test WHERE id BETWEEN 2 AND 3;");
+    if (!result.ok() || result.value->rows.size() != 1 ||
+        !std::holds_alternative<std::int64_t>(result.value->rows[0].values[0]) ||
+        std::get<std::int64_t>(result.value->rows[0].values[0]) != 2) {
+        std::cout << "pipeline_error\n";
+        return 1;
+    }
 
     result = engine.ExecuteSql(session, "SELECT COUNT(*) AS c FROM test;");
     if (!result.ok() || result.value->rows.size() != 1 ||
