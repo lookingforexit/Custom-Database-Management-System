@@ -136,3 +136,7 @@ add_test(NAME dbms_telemetry_realtime COMMAND dbms_telemetry_realtime)
 add_executable(dbms_auth_rbac_jwt tests/auth_rbac_jwt.cpp)
 target_link_libraries(dbms_auth_rbac_jwt PRIVATE dbms_core)
 add_test(NAME dbms_auth_rbac_jwt COMMAND dbms_auth_rbac_jwt)
+
+add_executable(dbms_default_acceptance tests/default_acceptance.cpp)
+target_link_libraries(dbms_default_acceptance PRIVATE dbms_core)
+add_test(NAME dbms_default_acceptance COMMAND dbms_default_acceptance)
