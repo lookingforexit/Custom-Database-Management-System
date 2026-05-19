@@ -62,7 +62,7 @@ int main() {
     assert(simple_tokens[12].lexeme == ";");
 
     const std::string complex_query =
-        "SELECT name, age FROM db1.users WHERE age >= 18 AND city != 'Moscow' OR (score <= 10);";
+        "SELECT name, age FROM db1.users WHERE age >= 18 AND city != \"Moscow\" OR (score <= 10);";
     const auto complex_tokens = dbms::parser::Lexer::Tokenize(complex_query);
 
     assert(complex_tokens.size() == 23);
@@ -81,7 +81,7 @@ int main() {
     assert(complex_tokens[12].lexeme == "AND");
     assert(complex_tokens[13].lexeme == "city");
     assert(complex_tokens[14].lexeme == "!=");
-    assert(complex_tokens[15].lexeme == "'Moscow'");
+    assert(complex_tokens[15].lexeme == "\"Moscow\"");
     assert(complex_tokens[16].lexeme == "OR");
     assert(complex_tokens[17].lexeme == "(");
     assert(complex_tokens[18].lexeme == "score");
