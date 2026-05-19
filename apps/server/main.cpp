@@ -1,5 +1,6 @@
 #include <iostream>
 #include <string>
+#include <thread>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -38,6 +39,28 @@ namespace {
             sent += static_cast<std::size_t>(bytes);
         }
         return true;
+    }
+
+    void HandleClientSocket(int client_fd, dbms::server::EntrypointServer &server) {
+        std::string wire_request;
+        if (!ReadLine(client_fd, wire_request)) {
+            close(client_fd);
+            return;
+        }
+
+        dbms::network::RequestEnvelope request;
+        dbms::network::ResponseEnvelope response;
+        if (!dbms::network::DeserializeRequest(wire_request, request)) {
+            response.status_code = 400;
+            response.payload =
+                "type=PARSE_ERROR code=1 message=invalid request envelope sql=\"\"";
+        } else {
+            response = server.HandleRequest(request);
+        }
+
+        const auto wire_response = dbms::network::SerializeResponse(response);
+        WriteAll(client_fd, wire_response);
+        close(client_fd);
     }
 
 } // namespace
@@ -92,24 +115,6 @@ int main(int argc, char **argv) {
         if (client_fd < 0) {
             continue;
         }
-
-        std::string wire_request;
-        if (!ReadLine(client_fd, wire_request)) {
-            close(client_fd);
-            continue;
-        }
-
-        dbms::network::RequestEnvelope request;
-        dbms::network::ResponseEnvelope response;
-        if (!dbms::network::DeserializeRequest(wire_request, request)) {
-            response.status_code = 400;
-            response.payload = "type=PARSE_ERROR code=1 message=invalid request envelope sql=\"\"";
-        } else {
-            response = server.HandleRequest(request);
-        }
-
-        const auto wire_response = dbms::network::SerializeResponse(response);
-        WriteAll(client_fd, wire_response);
-        close(client_fd);
+        std::thread(HandleClientSocket, client_fd, std::ref(server)).detach();
     }
 }

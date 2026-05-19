@@ -115,3 +115,7 @@ add_test(NAME dbms_revert_no_file_snapshot COMMAND dbms_revert_no_file_snapshot)
 add_executable(dbms_string_interning tests/string_interning.cpp)
 target_link_libraries(dbms_string_interning PRIVATE dbms_core)
 add_test(NAME dbms_string_interning COMMAND dbms_string_interning)
+
+add_executable(dbms_cluster_entrypoint tests/cluster_entrypoint.cpp)
+target_link_libraries(dbms_cluster_entrypoint PRIVATE dbms_core)
+add_test(NAME dbms_cluster_entrypoint COMMAND dbms_cluster_entrypoint)
