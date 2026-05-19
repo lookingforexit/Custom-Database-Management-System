@@ -133,6 +133,14 @@ namespace dbms::parser {
             return static_cast<std::int64_t>(v);
         }
 
+        common::Value ParseLiteralToken(Cursor &c) {
+            if (c.Match("-")) {
+                const std::string next = c.Take();
+                return ParseLiteral("-" + next);
+            }
+            return ParseLiteral(c.Take());
+        }
+
         QualifiedName ParseQualifiedName(Cursor &c) {
             const std::string first = c.TakeIdentifier();
             if (c.Match(".")) {
@@ -158,7 +166,7 @@ namespace dbms::parser {
                     .column_name = q.object_name,
                 }};
             }
-            return Expression{LiteralExpression{.value = ParseLiteral(c.Take())}};
+            return Expression{LiteralExpression{.value = ParseLiteralToken(c)}};
         }
 
         ComparisonOperator ParseCmpOp(const std::string &token) {
@@ -264,7 +272,7 @@ namespace dbms::parser {
                         continue;
                     }
                     if (c.MatchKeyword("DEFAULT")) {
-                        col.default_value = ParseLiteral(c.Take());
+                        col.default_value = ParseLiteralToken(c);
                         continue;
                     }
                     break;
@@ -310,7 +318,7 @@ namespace dbms::parser {
                 std::vector<Expression> row;
                 while (true) {
                     row.push_back(
-                        Expression{LiteralExpression{.value = ParseLiteral(c.Take())}});
+                        Expression{LiteralExpression{.value = ParseLiteralToken(c)}});
                     if (c.Match(")")) {
                         break;
                     }

@@ -144,3 +144,7 @@ add_test(NAME dbms_default_acceptance COMMAND dbms_default_acceptance)
 add_executable(dbms_where_and_or_stress tests/where_and_or_stress.cpp)
 target_link_libraries(dbms_where_and_or_stress PRIVATE dbms_core)
 add_test(NAME dbms_where_and_or_stress COMMAND dbms_where_and_or_stress)
+
+add_executable(dbms_aggregate_edge_cases tests/aggregate_edge_cases.cpp)
+target_link_libraries(dbms_aggregate_edge_cases PRIVATE dbms_core)
+add_test(NAME dbms_aggregate_edge_cases COMMAND dbms_aggregate_edge_cases)
