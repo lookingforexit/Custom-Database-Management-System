@@ -9,9 +9,14 @@ namespace dbms::common {
         kOk,
         kParseError,
         kSemanticError,
+        kValidationError,
         kStorageError,
         kAuthorizationError,
         kNetworkError,
+        kNotFound,
+        kAlreadyExists,
+        kConstraintViolation,
+        kTypeMismatch,
         kNotImplemented,
     };
 

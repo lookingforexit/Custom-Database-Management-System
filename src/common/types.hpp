@@ -28,8 +28,10 @@ namespace dbms::common {
         return std::holds_alternative<std::monostate>(value);
     }
 
+    // default comparison logic for non-null, but null == null
+    int64_t CompareValues(const Value& lhs, const Value& rhs);
     ValueType GetValueType(const Value &value);
-
     std::string ValueToString(const Value &value);
+    bool CanAssignToType(const Value& value, ValueType type, bool allow_null);
 
 } // namespace dbms::common
