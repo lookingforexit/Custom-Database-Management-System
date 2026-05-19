@@ -82,3 +82,7 @@ add_test(NAME dbms_revert_requirements COMMAND dbms_revert_requirements)
 add_executable(dbms_transactions tests/transactions.cpp)
 target_link_libraries(dbms_transactions PRIVATE dbms_core)
 add_test(NAME dbms_transactions COMMAND dbms_transactions)
+
+add_executable(dbms_revert_transactions tests/revert_transactions.cpp)
+target_link_libraries(dbms_revert_transactions PRIVATE dbms_core)
+add_test(NAME dbms_revert_transactions COMMAND dbms_revert_transactions)

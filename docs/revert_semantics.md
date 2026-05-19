@@ -1,8 +1,12 @@
 # REVERT Semantics
 
 - `REVERT` is an autocommit operation in the current project state.
-- Transactional commands (`BEGIN/COMMIT/ROLLBACK`) are not implemented yet.
-- Because of that, `REVERT` is always executed immediately and persisted as a new snapshot.
+- Outside an explicit transaction, `REVERT` is autocommit.
+- Inside `BEGIN ... COMMIT/ROLLBACK`, `REVERT` is transactional:
+- It mutates only the session-local working state.
+- Other sessions do not observe the reverted state before `COMMIT`.
+- `ROLLBACK` discards the `REVERT` effect.
+- `COMMIT` publishes the reverted state atomically.
 - Supported forms:
 - `REVERT <table> LATEST;`
 - `REVERT <table> EXACT "<YYYY.MM.DD-HH:MM:SS.ffffff>";`
