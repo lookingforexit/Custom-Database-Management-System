@@ -469,6 +469,10 @@ namespace dbms::core {
             return false;
         }
         version_store.ReplaceAll(std::move(loaded_records));
+        auto index_validation = ValidateRuntimeIndexConsistency(runtime_state);
+        if (!index_validation.ok()) {
+            return false;
+        }
         return true;
     }
 
