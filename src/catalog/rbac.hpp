@@ -2,7 +2,9 @@
 
 // this file defines rbac models for users, groups, and permission checks.
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace dbms::catalog {
@@ -24,9 +26,33 @@ namespace dbms::catalog {
 
     class AccessController {
       public:
+        [[nodiscard]] bool RegisterAccount(const std::string &user_id,
+                                           const std::string &password,
+                                           const std::string &group,
+                                           std::string &error_message);
+        [[nodiscard]] std::optional<std::string>
+        LoginAndIssueToken(const std::string &user_id,
+                           const std::string &password,
+                           std::string &error_message) const;
+        [[nodiscard]] std::optional<std::string>
+        ValidateTokenAndGetUser(const std::string &token) const;
+        [[nodiscard]] bool HasAccounts() const;
         [[nodiscard]] bool Authorize(const std::string &user_id,
                                      const std::string &database_name,
                                      Permission permission) const;
+
+      private:
+        [[nodiscard]] std::string HashPassword(const std::string &salt,
+                                               const std::string &password) const;
+        [[nodiscard]] std::string NewSalt() const;
+        [[nodiscard]] std::string
+        IssueToken(const std::string &user_id, std::int64_t expires_unix) const;
+        [[nodiscard]] std::string
+        SignTokenPayload(const std::string &payload) const;
+        [[nodiscard]] bool HasPermissionInGroups(
+            const std::vector<std::string> &groups, Permission permission) const;
+
+        std::unordered_map<std::string, AccountRecord> accounts_;
     };
 
 } // namespace dbms::catalog

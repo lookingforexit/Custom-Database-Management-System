@@ -132,3 +132,7 @@ add_test(NAME dbms_access_logs COMMAND dbms_access_logs)
 add_executable(dbms_telemetry_realtime tests/telemetry_realtime.cpp)
 target_link_libraries(dbms_telemetry_realtime PRIVATE dbms_core)
 add_test(NAME dbms_telemetry_realtime COMMAND dbms_telemetry_realtime)
+
+add_executable(dbms_auth_rbac_jwt tests/auth_rbac_jwt.cpp)
+target_link_libraries(dbms_auth_rbac_jwt PRIVATE dbms_core)
+add_test(NAME dbms_auth_rbac_jwt COMMAND dbms_auth_rbac_jwt)

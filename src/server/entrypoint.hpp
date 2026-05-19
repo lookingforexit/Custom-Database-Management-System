@@ -10,6 +10,7 @@
 #include <mutex>
 
 #include "core/dbms_engine.hpp"
+#include "catalog/rbac.hpp"
 #include "network/protocol.hpp"
 #include "parser/parser.hpp"
 #include "runtime/job_queue.hpp"
@@ -42,6 +43,10 @@ namespace dbms::server {
                                              network::ResponseEnvelope &response);
         [[nodiscard]] bool ParseTelemetryCommand(const std::string &payload,
                                                  network::ResponseEnvelope &response);
+        [[nodiscard]] bool ParseAuthCommand(const network::RequestEnvelope &request,
+                                            network::ResponseEnvelope &response);
+        [[nodiscard]] std::optional<catalog::Permission>
+        RequiredPermission(const parser::Statement &statement) const;
         [[nodiscard]] std::optional<std::size_t>
         RouteNodeIndex(const parser::Statement &statement,
                        const std::vector<StorageNodeEndpoint> &nodes) const;
@@ -67,6 +72,7 @@ namespace dbms::server {
         parser::Parser parser_;
         runtime::JobQueue job_queue_;
         runtime::TelemetryRegistry telemetry_;
+        catalog::AccessController access_controller_;
         std::unordered_map<std::string, core::SessionContext> sessions_;
         std::vector<StorageNodeEndpoint> storage_nodes_;
         mutable std::mutex nodes_mutex_;

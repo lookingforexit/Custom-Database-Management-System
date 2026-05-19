@@ -162,6 +162,10 @@ namespace dbms::server {
         if (ParseTelemetryCommand(request.payload, telemetry_response)) {
             return finalize(telemetry_response);
         }
+        network::ResponseEnvelope auth_response;
+        if (ParseAuthCommand(request, auth_response)) {
+            return finalize(auth_response);
+        }
 
         auto parsed = parser_.Parse(request.payload);
         if (!parsed.ok()) {
@@ -173,6 +177,22 @@ namespace dbms::server {
 
         auto &session = GetOrCreateSession(request.client_id);
         session.client_id = request.client_id;
+        if (access_controller_.HasAccounts()) {
+            const auto user_id =
+                access_controller_.ValidateTokenAndGetUser(request.jwt_token);
+            if (!user_id.has_value()) {
+                return finalize({.status_code = 401,
+                                 .payload = "type=AUTHORIZATION_ERROR code=5 message=invalid or expired jwt token sql=\"\""});
+            }
+            session.user_id = *user_id;
+            const auto required_permission = RequiredPermission(statement);
+            if (required_permission.has_value() &&
+                !access_controller_.Authorize(*user_id, session.current_database,
+                                              *required_permission)) {
+                return finalize({.status_code = 403,
+                                 .payload = "type=AUTHORIZATION_ERROR code=5 message=permission denied sql=\"\""});
+            }
+        }
 
         std::vector<StorageNodeEndpoint> nodes_snapshot;
         {
@@ -409,6 +429,72 @@ namespace dbms::server {
                << " error_rate_1m=" << snapshot.error_rate_1m;
         response = {.status_code = 200, .payload = output.str()};
         return true;
+    }
+
+    bool EntrypointServer::ParseAuthCommand(
+        const network::RequestEnvelope &request, network::ResponseEnvelope &response) {
+        const auto tokens = SplitWhitespace(request.payload);
+        if (tokens.size() < 2 || ToUpper(tokens[0]) != "AUTH") {
+            return false;
+        }
+        const auto command = ToUpper(tokens[1]);
+        if (command == "REGISTER" && tokens.size() >= 4) {
+            const std::string group = tokens.size() >= 5 ? tokens[4] : "admin";
+            std::string error_message;
+            if (!access_controller_.RegisterAccount(tokens[2], tokens[3], group,
+                                                    error_message)) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "registered"};
+            return true;
+        }
+        if (command == "LOGIN" && tokens.size() >= 4) {
+            std::string error_message;
+            const auto token =
+                access_controller_.LoginAndIssueToken(tokens[2], tokens[3], error_message);
+            if (!token.has_value()) {
+                response = {.status_code = 401,
+                            .payload = "type=AUTHORIZATION_ERROR code=5 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "token=" + *token};
+            return true;
+        }
+        response = {.status_code = 400,
+                    .payload = "type=VALIDATION_ERROR code=3 message=invalid AUTH command sql=\"\""};
+        return true;
+    }
+
+    std::optional<catalog::Permission>
+    EntrypointServer::RequiredPermission(const parser::Statement &statement) const {
+        if (std::holds_alternative<parser::SelectStatement>(statement) ||
+            std::holds_alternative<parser::UseDatabaseStatement>(statement)) {
+            return catalog::Permission::kRead;
+        }
+        if (std::holds_alternative<parser::InsertStatement>(statement) ||
+            std::holds_alternative<parser::UpdateStatement>(statement) ||
+            std::holds_alternative<parser::DeleteStatement>(statement) ||
+            std::holds_alternative<parser::RevertStatement>(statement) ||
+            std::holds_alternative<parser::BeginTransactionStatement>(statement) ||
+            std::holds_alternative<parser::CommitTransactionStatement>(statement) ||
+            std::holds_alternative<parser::RollbackTransactionStatement>(statement)) {
+            return catalog::Permission::kWrite;
+        }
+        if (std::holds_alternative<parser::CreateDatabaseStatement>(statement) ||
+            std::holds_alternative<parser::CreateTableStatement>(statement)) {
+            return catalog::Permission::kCreateTable;
+        }
+        if (std::holds_alternative<parser::DropTableStatement>(statement)) {
+            return catalog::Permission::kDropTable;
+        }
+        if (std::holds_alternative<parser::DropDatabaseStatement>(statement)) {
+            return catalog::Permission::kDropDatabase;
+        }
+        return std::nullopt;
     }
 
     std::optional<std::size_t>
