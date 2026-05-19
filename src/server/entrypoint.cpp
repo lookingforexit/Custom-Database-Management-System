@@ -7,7 +7,11 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <ctime>
+#include <filesystem>
 #include <functional>
+#include <fstream>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -88,10 +92,20 @@ namespace dbms::server {
             return true;
         }
 
+        std::string SanitizeLogField(std::string value) {
+            for (char &ch : value) {
+                if (ch == '\n' || ch == '\r' || ch == '\t') {
+                    ch = ' ';
+                }
+            }
+            return value;
+        }
+
     } // namespace
 
     EntrypointServer::EntrypointServer(std::string root_path)
-        : engine_(std::move(root_path)) {
+        : engine_(root_path), access_log_path_(root_path + "/access.log") {
+        std::filesystem::create_directories(root_path);
         job_queue_.Start([this](const std::string &sql) -> std::pair<int, std::string> {
             auto parsed = parser_.Parse(sql);
             if (!parsed.ok()) {
@@ -121,20 +135,30 @@ namespace dbms::server {
 
     network::ResponseEnvelope
     EntrypointServer::HandleRequest(const network::RequestEnvelope &request) {
+        const auto started_at = std::chrono::steady_clock::now();
+        auto finalize = [&](network::ResponseEnvelope response) {
+            const auto finished_at = std::chrono::steady_clock::now();
+            const auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        finished_at - started_at)
+                                        .count();
+            WriteAccessLog(request, response, latency_ms);
+            return response;
+        };
+
         network::ResponseEnvelope cluster_response;
         if (ParseClusterCommand(request.payload, cluster_response)) {
-            return cluster_response;
+            return finalize(cluster_response);
         }
         network::ResponseEnvelope async_response;
         if (ParseAsyncCommand(request, async_response)) {
-            return async_response;
+            return finalize(async_response);
         }
 
         auto parsed = parser_.Parse(request.payload);
         if (!parsed.ok()) {
-            return {.status_code = 400,
-                    .payload =
-                        common::FormatErrorContract(*parsed.error, request.payload)};
+            return finalize({.status_code = 400,
+                             .payload = common::FormatErrorContract(*parsed.error,
+                                                                    request.payload)});
         }
         const auto &statement = *parsed.value;
 
@@ -154,10 +178,10 @@ namespace dbms::server {
                     BroadcastToStorageNodes(nodes_snapshot, request, false,
                                             merged_unused);
                 if (!broadcast_result.has_value()) {
-                    return {.status_code = 502,
-                            .payload = "type=NETWORK_ERROR code=6 message=cluster broadcast failed sql=\"\""};
+                    return finalize({.status_code = 502,
+                                     .payload = "type=NETWORK_ERROR code=6 message=cluster broadcast failed sql=\"\""});
                 }
-                return *broadcast_result;
+                return finalize(*broadcast_result);
             }
 
             if (IsSelectStatement(statement) &&
@@ -166,38 +190,66 @@ namespace dbms::server {
                 auto fanout =
                     BroadcastToStorageNodes(nodes_snapshot, request, true, merged_json);
                 if (!fanout.has_value()) {
-                    return {.status_code = 502,
-                            .payload = "type=NETWORK_ERROR code=6 message=cluster fan-out failed sql=\"\""};
+                    return finalize({.status_code = 502,
+                                     .payload = "type=NETWORK_ERROR code=6 message=cluster fan-out failed sql=\"\""});
                 }
-                return {.status_code = 200, .payload = merged_json};
+                return finalize({.status_code = 200, .payload = merged_json});
             }
 
             const auto node_index = RouteNodeIndex(statement, nodes_snapshot);
             if (!node_index.has_value()) {
-                return {.status_code = 502,
-                        .payload = "type=NETWORK_ERROR code=6 message=unable to route request sql=\"\""};
+                return finalize({.status_code = 502,
+                                 .payload = "type=NETWORK_ERROR code=6 message=unable to route request sql=\"\""});
             }
             auto forwarded =
                 ForwardToStorageNode(nodes_snapshot[*node_index], request);
             if (forwarded.has_value()) {
-                return *forwarded;
+                return finalize(*forwarded);
             }
-            return {.status_code = 502,
-                    .payload = "type=NETWORK_ERROR code=6 message=target storage node unavailable sql=\"\""};
+            return finalize({.status_code = 502,
+                             .payload = "type=NETWORK_ERROR code=6 message=target storage node unavailable sql=\"\""});
         }
 
         auto result = engine_.ExecuteSql(session, request.payload);
         if (!result.ok()) {
-            return {
+            return finalize({
                 .status_code = 400,
                 .payload = common::FormatErrorContract(*result.error, request.payload),
-            };
+            });
         }
 
         if (IsSelectStatement(statement)) {
-            return {.status_code = 200, .payload = QueryResultToJson(*result.value)};
+            return finalize(
+                {.status_code = 200, .payload = QueryResultToJson(*result.value)});
         }
-        return {.status_code = 200, .payload = result.value->message};
+        return finalize({.status_code = 200, .payload = result.value->message});
+    }
+
+    void EntrypointServer::WriteAccessLog(
+        const network::RequestEnvelope &request,
+        const network::ResponseEnvelope &response,
+        std::int64_t latency_ms) const {
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t time_value = std::chrono::system_clock::to_time_t(now);
+        std::tm utc_tm{};
+#if defined(_WIN32)
+        gmtime_s(&utc_tm, &time_value);
+#else
+        gmtime_r(&time_value, &utc_tm);
+#endif
+
+        std::ostringstream timestamp;
+        timestamp << std::put_time(&utc_tm, "%Y-%m-%dT%H:%M:%SZ");
+
+        std::lock_guard<std::mutex> lock(access_log_mutex_);
+        std::ofstream out(access_log_path_, std::ios::app);
+        if (!out.is_open()) {
+            return;
+        }
+        out << "ts=" << timestamp.str() << "\tclient_id="
+            << SanitizeLogField(request.client_id) << "\tstatus="
+            << response.status_code << "\tlatency_ms=" << latency_ms << "\tsql=\""
+            << SanitizeLogField(request.payload) << "\"\n";
     }
 
     bool EntrypointServer::ParseClusterCommand(

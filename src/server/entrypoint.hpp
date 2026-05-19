@@ -2,6 +2,7 @@
 
 // this file defines the entrypoint facade that manages requests and client
 // sessions.
+#include <cstdint>
 #include <string>
 #include <optional>
 #include <vector>
@@ -55,6 +56,9 @@ namespace dbms::server {
         [[nodiscard]] std::optional<network::ResponseEnvelope>
         ForwardToStorageNode(const StorageNodeEndpoint &node,
                              const network::RequestEnvelope &request) const;
+        void WriteAccessLog(const network::RequestEnvelope &request,
+                            const network::ResponseEnvelope &response,
+                            std::int64_t latency_ms) const;
 
         core::DbmsEngine engine_;
         parser::Parser parser_;
@@ -62,6 +66,8 @@ namespace dbms::server {
         std::unordered_map<std::string, core::SessionContext> sessions_;
         std::vector<StorageNodeEndpoint> storage_nodes_;
         mutable std::mutex nodes_mutex_;
+        std::string access_log_path_;
+        mutable std::mutex access_log_mutex_;
     };
 
 } // namespace dbms::server

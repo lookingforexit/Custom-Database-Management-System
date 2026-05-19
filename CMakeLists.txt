@@ -124,3 +124,7 @@ add_test(NAME dbms_cluster_entrypoint COMMAND dbms_cluster_entrypoint)
 add_executable(dbms_async_job_queue tests/async_job_queue.cpp)
 target_link_libraries(dbms_async_job_queue PRIVATE dbms_core)
 add_test(NAME dbms_async_job_queue COMMAND dbms_async_job_queue)
+
+add_executable(dbms_access_logs tests/access_logs.cpp)
+target_link_libraries(dbms_access_logs PRIVATE dbms_core)
+add_test(NAME dbms_access_logs COMMAND dbms_access_logs)
