@@ -140,3 +140,7 @@ add_test(NAME dbms_auth_rbac_jwt COMMAND dbms_auth_rbac_jwt)
 add_executable(dbms_default_acceptance tests/default_acceptance.cpp)
 target_link_libraries(dbms_default_acceptance PRIVATE dbms_core)
 add_test(NAME dbms_default_acceptance COMMAND dbms_default_acceptance)
+
+add_executable(dbms_where_and_or_stress tests/where_and_or_stress.cpp)
+target_link_libraries(dbms_where_and_or_stress PRIVATE dbms_core)
+add_test(NAME dbms_where_and_or_stress COMMAND dbms_where_and_or_stress)
