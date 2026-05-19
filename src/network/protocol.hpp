@@ -16,4 +16,11 @@ namespace dbms::network {
         std::string payload;
     };
 
+    [[nodiscard]] std::string SerializeRequest(const RequestEnvelope &request);
+    [[nodiscard]] std::string SerializeResponse(const ResponseEnvelope &response);
+    [[nodiscard]] bool DeserializeRequest(const std::string &wire,
+                                          RequestEnvelope &request);
+    [[nodiscard]] bool DeserializeResponse(const std::string &wire,
+                                           ResponseEnvelope &response);
+
 } // namespace dbms::network

@@ -2,10 +2,17 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <optional>
+
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "core/dbms_engine.hpp"
 #include "common/error_contract.hpp"
 #include "common/types.hpp"
+#include "network/protocol.hpp"
 
 namespace {
 
@@ -85,6 +92,96 @@ namespace {
         return statements;
     }
 
+    std::optional<std::pair<std::string, int>>
+    ParseEndpoint(const std::string &endpoint) {
+        const auto colon_position = endpoint.rfind(':');
+        if (colon_position == std::string::npos || colon_position == 0 ||
+            colon_position + 1 >= endpoint.size()) {
+            return std::nullopt;
+        }
+        std::string host = endpoint.substr(0, colon_position);
+        int port = 0;
+        try {
+            port = std::stoi(endpoint.substr(colon_position + 1));
+        } catch (...) {
+            return std::nullopt;
+        }
+        if (port <= 0 || port > 65535) {
+            return std::nullopt;
+        }
+        return std::make_pair(host, port);
+    }
+
+    bool ReadLine(int socket_fd, std::string &line) {
+        line.clear();
+        char ch = '\0';
+        while (true) {
+            const auto bytes = recv(socket_fd, &ch, 1, 0);
+            if (bytes <= 0) {
+                return false;
+            }
+            if (ch == '\n') {
+                return true;
+            }
+            line.push_back(ch);
+        }
+    }
+
+    bool WriteAll(int socket_fd, const std::string &buffer) {
+        std::size_t sent = 0;
+        while (sent < buffer.size()) {
+            const auto bytes =
+                send(socket_fd, buffer.data() + static_cast<long>(sent),
+                     buffer.size() - sent, 0);
+            if (bytes <= 0) {
+                return false;
+            }
+            sent += static_cast<std::size_t>(bytes);
+        }
+        return true;
+    }
+
+    std::optional<dbms::network::ResponseEnvelope>
+    SendRemote(const std::string &host, int port,
+               const dbms::network::RequestEnvelope &request) {
+        const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (socket_fd < 0) {
+            return std::nullopt;
+        }
+
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(static_cast<uint16_t>(port));
+        if (inet_pton(AF_INET, host.c_str(), &address.sin_addr) != 1) {
+            close(socket_fd);
+            return std::nullopt;
+        }
+
+        if (connect(socket_fd, reinterpret_cast<sockaddr *>(&address),
+                    sizeof(address)) != 0) {
+            close(socket_fd);
+            return std::nullopt;
+        }
+
+        const auto wire_request = dbms::network::SerializeRequest(request);
+        if (!WriteAll(socket_fd, wire_request)) {
+            close(socket_fd);
+            return std::nullopt;
+        }
+        std::string wire_response;
+        if (!ReadLine(socket_fd, wire_response)) {
+            close(socket_fd);
+            return std::nullopt;
+        }
+        close(socket_fd);
+
+        dbms::network::ResponseEnvelope response;
+        if (!dbms::network::DeserializeResponse(wire_response, response)) {
+            return std::nullopt;
+        }
+        return response;
+    }
+
     int ExecuteAndPrint(dbms::core::DbmsEngine &engine,
                         dbms::core::SessionContext &session,
                         const std::string &sql,
@@ -105,6 +202,26 @@ namespace {
         return 0;
     }
 
+    int ExecuteAndPrintRemote(const std::string &host, int port,
+                              const std::string &client_id,
+                              const std::string &sql,
+                              std::size_t statement_index) {
+        const dbms::network::RequestEnvelope request{
+            .client_id = client_id,
+            .jwt_token = "",
+            .payload = sql,
+        };
+        const auto response = SendRemote(host, port, request);
+        if (!response.has_value()) {
+            std::cout << "error[" << statement_index
+                      << "]: type=NETWORK_ERROR code=6 message=failed to reach server sql=\""
+                      << dbms::common::EscapeJsonText(sql) << "\"\n";
+            return 1;
+        }
+        std::cout << response->payload << "\n";
+        return response->status_code == 200 ? 0 : 1;
+    }
+
 } // namespace
 
 // this file boots the cli client and routes commands through the dbms engine.
@@ -112,12 +229,29 @@ int main(int argc, char **argv) {
     dbms::core::DbmsEngine engine("./data");
     dbms::core::SessionContext session;
     session.client_id = "cli";
+    bool use_remote = false;
+    std::string remote_host = "127.0.0.1";
+    int remote_port = 4545;
+    int arg_index = 1;
+
+    if (argc >= 3 && std::string(argv[1]) == "--server") {
+        const auto endpoint = ParseEndpoint(argv[2]);
+        if (!endpoint.has_value()) {
+            std::cout << "error: invalid endpoint, expected host:port\n";
+            return 1;
+        }
+        use_remote = true;
+        remote_host = endpoint->first;
+        remote_port = endpoint->second;
+        arg_index = 3;
+    }
 
     // batch mode: ./dbms_cli script.sql
-    if (argc == 2) {
-        std::ifstream input_file(argv[1]);
+    if (argc == arg_index + 1) {
+        std::ifstream input_file(argv[arg_index]);
         if (!input_file.is_open()) {
-            std::cout << "error: cannot open script file: " << argv[1] << "\n";
+            std::cout << "error: cannot open script file: " << argv[arg_index]
+                      << "\n";
             return 1;
         }
         std::string script((std::istreambuf_iterator<char>(input_file)),
@@ -131,7 +265,14 @@ int main(int argc, char **argv) {
             if (!has_non_space) {
                 continue;
             }
-            if (ExecuteAndPrint(engine, session, statement, statement_index) != 0) {
+            int rc = 0;
+            if (use_remote) {
+                rc = ExecuteAndPrintRemote(remote_host, remote_port, "cli",
+                                           statement, statement_index);
+            } else {
+                rc = ExecuteAndPrint(engine, session, statement, statement_index);
+            }
+            if (rc != 0) {
                 exit_code = 1;
             }
             ++statement_index;
@@ -167,7 +308,12 @@ int main(int argc, char **argv) {
             if (!has_non_space) {
                 continue;
             }
-            ExecuteAndPrint(engine, session, statement, statement_index);
+            if (use_remote) {
+                ExecuteAndPrintRemote(remote_host, remote_port, "cli", statement,
+                                      statement_index);
+            } else {
+                ExecuteAndPrint(engine, session, statement, statement_index);
+            }
             ++statement_index;
         }
 
