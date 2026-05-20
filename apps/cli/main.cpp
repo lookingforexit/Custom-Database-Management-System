@@ -366,11 +366,6 @@ int main(int argc, char **argv) {
         if (statements.empty()) {
             continue;
         }
-        const bool ended_with_semicolon =
-            !buffer.empty() && buffer.find(';') != std::string::npos &&
-            buffer.find_last_not_of(" \t\r\n") != std::string::npos &&
-            buffer.find_last_of(';') >= buffer.find_first_not_of(" \t\r\n");
-
         std::size_t executable_count = statements.size();
         if (!buffer.empty() && buffer.back() != ';') {
             executable_count = statements.size() - 1;
@@ -398,7 +393,6 @@ int main(int argc, char **argv) {
         } else {
             buffer.clear();
         }
-        (void)ended_with_semicolon;
     }
 
     return 0;
