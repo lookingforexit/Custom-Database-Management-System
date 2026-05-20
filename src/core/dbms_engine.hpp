@@ -43,8 +43,6 @@ namespace dbms::core {
             const parser::Statement &statement) const;
         [[nodiscard]] std::string TransactionKey(
             const SessionContext &session) const;
-        [[nodiscard]] std::optional<std::string>
-        NormalizeServiceCommand(const std::string &sql) const;
         common::Result<execution::QueryResult>
         ExecuteSqlImpl(SessionContext &session, const std::string &sql,
                        bool write_wal);

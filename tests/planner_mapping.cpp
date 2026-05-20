@@ -133,6 +133,14 @@ int main() {
         auto plan = BuildPlanOrAbort(planner, "ROLLBACK;");
         assert(plan.kind == PlanNodeKind::kRollbackTransaction);
     }
+    {
+        auto plan = BuildPlanOrAbort(planner, "CHECK INDEX;");
+        assert(plan.kind == PlanNodeKind::kCheckIndex);
+    }
+    {
+        auto plan = BuildPlanOrAbort(planner, "REBUILD INDEX;");
+        assert(plan.kind == PlanNodeKind::kRebuildIndex);
+    }
 
     return 0;
 }

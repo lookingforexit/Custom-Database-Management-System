@@ -168,6 +168,8 @@ namespace dbms::parser {
     struct BeginTransactionStatement {};
     struct CommitTransactionStatement {};
     struct RollbackTransactionStatement {};
+    struct CheckIndexStatement {};
+    struct RebuildIndexStatement {};
 
     struct UnknownStatement {
         std::string raw_sql;
@@ -179,6 +181,7 @@ namespace dbms::parser {
                      CreateTableStatement, DropTableStatement, InsertStatement,
                      UpdateStatement, DeleteStatement, SelectStatement,
                      RevertStatement, BeginTransactionStatement,
-                     CommitTransactionStatement, RollbackTransactionStatement>;
+                     CommitTransactionStatement, RollbackTransactionStatement,
+                     CheckIndexStatement, RebuildIndexStatement>;
 
 } // namespace dbms::parser

@@ -1103,6 +1103,26 @@ namespace dbms::execution {
             return common::MakeSuccess(std::move(result));
         }
 
+        if (std::holds_alternative<parser::CheckIndexStatement>(statement)) {
+            auto check = core::ValidateRuntimeIndexConsistency(runtime_state_);
+            if (!check.ok()) {
+                return common::MakeError<QueryResult>(check.error->code,
+                                                      check.error->message);
+            }
+            result.message = "index check passed";
+            return common::MakeSuccess(std::move(result));
+        }
+
+        if (std::holds_alternative<parser::RebuildIndexStatement>(statement)) {
+            auto rebuilt = core::RebuildRuntimeIndexes(runtime_state_);
+            if (!rebuilt.ok()) {
+                return common::MakeError<QueryResult>(rebuilt.error->code,
+                                                      rebuilt.error->message);
+            }
+            result.message = "index rebuild completed";
+            return common::MakeSuccess(std::move(result));
+        }
+
         return common::MakeError<QueryResult>(
             common::ErrorCode::kNotImplemented,
             "plan kind is not implemented: " + plan.detail);

@@ -279,6 +279,18 @@ namespace dbms::planner {
             return common::MakeSuccess(std::move(node));
         }
 
+        if (std::holds_alternative<parser::CheckIndexStatement>(statement_ref)) {
+            node.kind = PlanNodeKind::kCheckIndex;
+            node.detail = "check index";
+            return common::MakeSuccess(std::move(node));
+        }
+
+        if (std::holds_alternative<parser::RebuildIndexStatement>(statement_ref)) {
+            node.kind = PlanNodeKind::kRebuildIndex;
+            node.detail = "rebuild index";
+            return common::MakeSuccess(std::move(node));
+        }
+
         if (std::holds_alternative<parser::UnknownStatement>(statement_ref)) {
             return common::MakeError<PlanNode>(
                 common::ErrorCode::kParseError,

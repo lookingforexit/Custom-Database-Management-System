@@ -447,6 +447,16 @@ namespace dbms::parser {
             return RollbackTransactionStatement{};
         }
 
+        Statement ParseCheck(Cursor &c) {
+            c.ExpectKeyword("INDEX");
+            return CheckIndexStatement{};
+        }
+
+        Statement ParseRebuild(Cursor &c) {
+            c.ExpectKeyword("INDEX");
+            return RebuildIndexStatement{};
+        }
+
         void ValidateCreateTable(const CreateTableStatement &stmt) {
             if (stmt.columns.empty()) {
                 throw std::runtime_error("CREATE TABLE must define columns");
@@ -603,6 +613,10 @@ namespace dbms::parser {
                 stmt = ParseCommit(c);
             } else if (c.MatchKeyword("ROLLBACK")) {
                 stmt = ParseRollback(c);
+            } else if (c.MatchKeyword("CHECK")) {
+                stmt = ParseCheck(c);
+            } else if (c.MatchKeyword("REBUILD")) {
+                stmt = ParseRebuild(c);
             } else {
                 return common::MakeError<Statement>(
                     common::ErrorCode::kParseError, "unsupported statement");

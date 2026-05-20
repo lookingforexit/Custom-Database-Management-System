@@ -92,6 +92,8 @@ int main() {
     ExpectParseOk(parser, "COMMIT TRANSACTION;");
     ExpectParseOk(parser, "ROLLBACK;");
     ExpectParseOk(parser, "ROLLBACK TRANSACTION;");
+    ExpectParseOk(parser, "CHECK INDEX;");
+    ExpectParseOk(parser, "REBUILD INDEX;");
 
     // AST shape checks: AND has higher precedence than OR.
     {
