@@ -49,6 +49,13 @@ namespace dbms::catalog {
         IssueToken(const std::string &user_id, std::int64_t expires_unix) const;
         [[nodiscard]] std::string
         SignTokenPayload(const std::string &payload) const;
+        [[nodiscard]] std::string Base64UrlEncode(const std::string &data) const;
+        [[nodiscard]] std::optional<std::string>
+        Base64UrlDecode(const std::string &data) const;
+        [[nodiscard]] std::optional<std::int64_t>
+        ExtractNumericClaim(const std::string &json, const std::string &key) const;
+        [[nodiscard]] std::optional<std::string>
+        ExtractStringClaim(const std::string &json, const std::string &key) const;
         [[nodiscard]] bool HasPermissionInGroups(
             const std::vector<std::string> &groups, Permission permission) const;
 

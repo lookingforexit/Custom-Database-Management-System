@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(OpenSSL REQUIRED)
+
 add_library(dbms_core
     src/catalog/catalog.cpp
     src/catalog/rbac.cpp
@@ -34,6 +36,7 @@ add_library(dbms_core
 )
 
 target_include_directories(dbms_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(dbms_core PUBLIC OpenSSL::Crypto)
 
 add_executable(dbms_cli apps/cli/main.cpp)
 target_link_libraries(dbms_cli PRIVATE dbms_core)
