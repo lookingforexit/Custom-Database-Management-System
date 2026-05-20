@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <sstream>
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -15,6 +16,26 @@
 #include "network/protocol.hpp"
 
 namespace {
+    void PrintUsage(const char *program_name) {
+        std::cout << "Usage:\n";
+        std::cout << "  " << program_name << " [script.sql]\n";
+        std::cout << "  " << program_name
+                  << " --server host:port [--jwt token] [script.sql]\n";
+        std::cout << "  " << program_name << " --demo [--server host:port] [--jwt token]\n";
+        std::cout << "  " << program_name << " --help\n";
+    }
+
+    std::vector<std::string> BuildDemoStatements() {
+        return {
+            "CREATE DATABASE demo;",
+            "USE demo;",
+            "CREATE TABLE users (id INT INDEXED, name STRING, score INT DEFAULT 0);",
+            "INSERT INTO users (id, name) VALUES (1, \"Ann\"), (2, \"Bob\");",
+            "UPDATE users SET score = 42 WHERE id == 2;",
+            "SELECT * FROM users;",
+            "SELECT COUNT(*), SUM(score), AVG(score) FROM users;",
+        };
+    }
 
     std::string ValueToJson(const dbms::common::Value &value) {
         if (std::holds_alternative<std::monostate>(value)) {
@@ -204,11 +225,12 @@ namespace {
 
     int ExecuteAndPrintRemote(const std::string &host, int port,
                               const std::string &client_id,
+                              const std::string &jwt_token,
                               const std::string &sql,
                               std::size_t statement_index) {
         const dbms::network::RequestEnvelope request{
             .client_id = client_id,
-            .jwt_token = "",
+            .jwt_token = jwt_token,
             .payload = sql,
         };
         const auto response = SendRemote(host, port, request);
@@ -230,20 +252,73 @@ int main(int argc, char **argv) {
     dbms::core::SessionContext session;
     session.client_id = "cli";
     bool use_remote = false;
+    bool run_demo = false;
     std::string remote_host = "127.0.0.1";
     int remote_port = 4545;
+    std::string jwt_token;
     int arg_index = 1;
 
-    if (argc >= 3 && std::string(argv[1]) == "--server") {
-        const auto endpoint = ParseEndpoint(argv[2]);
-        if (!endpoint.has_value()) {
-            std::cout << "error: invalid endpoint, expected host:port\n";
-            return 1;
+    if (argc >= 2 && std::string(argv[1]) == "--help") {
+        PrintUsage(argv[0]);
+        return 0;
+    }
+
+    while (arg_index < argc) {
+        const std::string arg = argv[arg_index];
+        if (arg == "--help") {
+            PrintUsage(argv[0]);
+            return 0;
         }
-        use_remote = true;
-        remote_host = endpoint->first;
-        remote_port = endpoint->second;
-        arg_index = 3;
+        if (arg == "--demo") {
+            run_demo = true;
+            ++arg_index;
+            continue;
+        }
+        if (arg == "--server") {
+            if (arg_index + 1 >= argc) {
+                std::cout << "error: --server requires host:port\n";
+                return 1;
+            }
+            const auto endpoint = ParseEndpoint(argv[arg_index + 1]);
+            if (!endpoint.has_value()) {
+                std::cout << "error: invalid endpoint, expected host:port\n";
+                return 1;
+            }
+            use_remote = true;
+            remote_host = endpoint->first;
+            remote_port = endpoint->second;
+            arg_index += 2;
+            continue;
+        }
+        if (arg == "--jwt") {
+            if (arg_index + 1 >= argc) {
+                std::cout << "error: --jwt requires token\n";
+                return 1;
+            }
+            jwt_token = argv[arg_index + 1];
+            arg_index += 2;
+            continue;
+        }
+        break;
+    }
+
+    if (run_demo) {
+        int exit_code = 0;
+        std::size_t statement_index = 1;
+        for (const auto &statement : BuildDemoStatements()) {
+            int rc = 0;
+            if (use_remote) {
+                rc = ExecuteAndPrintRemote(remote_host, remote_port, "cli", jwt_token,
+                                           statement, statement_index);
+            } else {
+                rc = ExecuteAndPrint(engine, session, statement, statement_index);
+            }
+            if (rc != 0) {
+                exit_code = 1;
+            }
+            ++statement_index;
+        }
+        return exit_code;
     }
 
     // batch mode: ./dbms_cli script.sql
@@ -267,7 +342,7 @@ int main(int argc, char **argv) {
             }
             int rc = 0;
             if (use_remote) {
-                rc = ExecuteAndPrintRemote(remote_host, remote_port, "cli",
+                rc = ExecuteAndPrintRemote(remote_host, remote_port, "cli", jwt_token,
                                            statement, statement_index);
             } else {
                 rc = ExecuteAndPrint(engine, session, statement, statement_index);
@@ -309,7 +384,8 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (use_remote) {
-                ExecuteAndPrintRemote(remote_host, remote_port, "cli", statement,
+                ExecuteAndPrintRemote(remote_host, remote_port, "cli", jwt_token,
+                                      statement,
                                       statement_index);
             } else {
                 ExecuteAndPrint(engine, session, statement, statement_index);

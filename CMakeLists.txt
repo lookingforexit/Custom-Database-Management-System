@@ -93,6 +93,9 @@ add_test(NAME dbms_revert_transactions COMMAND dbms_revert_transactions)
 add_test(NAME dbms_cli_batch
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_cli_batch.sh
             $<TARGET_FILE:dbms_cli>)
+add_test(NAME dbms_cli_demo
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_cli_demo.sh
+            $<TARGET_FILE:dbms_cli>)
 
 add_executable(dbms_index_consistency tests/index_consistency.cpp)
 target_link_libraries(dbms_index_consistency PRIVATE dbms_core)
