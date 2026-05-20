@@ -8,7 +8,12 @@
 namespace dbms::core {
 
     namespace {
-        constexpr const char *kHeader = "WAL\t1";
+        constexpr const char *kHeaderPrefix = "WAL\t";
+        constexpr const char *kCurrentVersion = "2";
+
+        bool IsSupportedWalVersion(const std::string &version) {
+            return version == "1" || version == "2";
+        }
     }
 
     WalManager::WalManager(std::string root_path) : root_path_(std::move(root_path)) {}
@@ -20,7 +25,7 @@ namespace dbms::core {
             return false;
         }
         if (out.tellp() == 0) {
-            out << kHeader << "\n";
+            out << kHeaderPrefix << kCurrentVersion << "\n";
         }
         out << "SQL\t" << Escape(sql) << "\n";
         return out.good();
@@ -34,7 +39,7 @@ namespace dbms::core {
             return false;
         }
         if (out.tellp() == 0) {
-            out << kHeader << "\n";
+            out << kHeaderPrefix << kCurrentVersion << "\n";
         }
         out << "TX_BEGIN\n";
         for (const auto &statement : statements) {
@@ -54,7 +59,11 @@ namespace dbms::core {
         if (!std::getline(in, line)) {
             return true;
         }
-        if (line != kHeader) {
+        if (line.rfind(kHeaderPrefix, 0) != 0) {
+            return false;
+        }
+        const std::string version = line.substr(std::string(kHeaderPrefix).size());
+        if (!IsSupportedWalVersion(version)) {
             return false;
         }
 
@@ -109,7 +118,7 @@ namespace dbms::core {
         if (!out.is_open()) {
             return false;
         }
-        out << kHeader << "\n";
+        out << kHeaderPrefix << kCurrentVersion << "\n";
         return out.good();
     }
 

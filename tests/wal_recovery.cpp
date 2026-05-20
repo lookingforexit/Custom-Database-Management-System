@@ -135,5 +135,56 @@ int main() {
         std::filesystem::remove_all(root_corrupt);
     }
 
+    // WAL format version compatibility: v1 is supported.
+    {
+        const std::string root_v1 = "./test_data_wal_v1";
+        std::filesystem::remove_all(root_v1);
+        std::filesystem::create_directories(root_v1);
+        {
+            std::ofstream out(root_v1 + "/wal.log", std::ios::trunc);
+            out << "WAL\t1\n";
+            out << "SQL\tCREATE DATABASE vdb;\n";
+            out << "SQL\tUSE vdb;\n";
+            out << "SQL\tCREATE TABLE t (id INT INDEXED, name STRING);\n";
+            out << "SQL\tINSERT INTO t (id, name) VALUES (1, \"A\");\n";
+        }
+        dbms::core::DbmsEngine engine_v1(root_v1);
+        dbms::core::SessionContext session_v1;
+        session_v1.client_id = "wal_v1_reader";
+        if (!engine_v1.ExecuteSql(session_v1, "USE vdb;").ok()) return 1;
+        auto count_v1 = engine_v1.ExecuteSql(session_v1, "SELECT COUNT(*) FROM t;");
+        if (!count_v1.ok() || count_v1.value->rows.size() != 1 ||
+            !std::holds_alternative<std::int64_t>(count_v1.value->rows[0].values[0]) ||
+            std::get<std::int64_t>(count_v1.value->rows[0].values[0]) != 1) {
+            return 1;
+        }
+        std::filesystem::remove_all(root_v1);
+    }
+
+    // Unsupported WAL version must be quarantined.
+    {
+        const std::string root_bad_ver = "./test_data_wal_bad_version";
+        std::filesystem::remove_all(root_bad_ver);
+        std::filesystem::create_directories(root_bad_ver);
+        {
+            std::ofstream out(root_bad_ver + "/wal.log", std::ios::trunc);
+            out << "WAL\t999\n";
+            out << "SQL\tCREATE DATABASE bad;\n";
+        }
+        dbms::core::DbmsEngine engine_bad_ver(root_bad_ver);
+        (void)engine_bad_ver;
+        bool has_quarantine = false;
+        for (const auto &entry : std::filesystem::directory_iterator(root_bad_ver)) {
+            if (!entry.is_regular_file()) continue;
+            const auto name = entry.path().filename().string();
+            if (name.rfind("wal.log.corrupt.", 0) == 0) {
+                has_quarantine = true;
+                break;
+            }
+        }
+        if (!has_quarantine) return 1;
+        std::filesystem::remove_all(root_bad_ver);
+    }
+
     return 0;
 }
