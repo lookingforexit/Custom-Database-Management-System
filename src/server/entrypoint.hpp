@@ -8,6 +8,7 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#include <unordered_set>
 
 #include "core/dbms_engine.hpp"
 #include "catalog/rbac.hpp"
@@ -33,6 +34,10 @@ namespace dbms::server {
             bool managed{false};
             int fail_count{0};
         };
+        struct PendingClusterTransaction {
+            std::string sql;
+            std::string client_id;
+        };
 
         bool RestartManagedNode(StorageNodeEndpoint &node) const;
 
@@ -54,8 +59,12 @@ namespace dbms::server {
         ExtractTargetTableName(const parser::Statement &statement) const;
         [[nodiscard]] bool ShouldBroadcast(const parser::Statement &statement) const;
         [[nodiscard]] bool IsSelectStatement(const parser::Statement &statement) const;
+        [[nodiscard]] bool IsMutatingStatement(const parser::Statement &statement) const;
         [[nodiscard]] std::string
         QueryResultToJson(const execution::QueryResult &result) const;
+        [[nodiscard]] std::optional<network::ResponseEnvelope>
+        ExecuteTwoPhaseCommit(const std::vector<StorageNodeEndpoint> &nodes,
+                              const network::RequestEnvelope &request) const;
         [[nodiscard]] std::optional<network::ResponseEnvelope>
         BroadcastToStorageNodes(const std::vector<StorageNodeEndpoint> &nodes,
                                 const network::RequestEnvelope &request,
@@ -76,6 +85,9 @@ namespace dbms::server {
         std::unordered_map<std::string, core::SessionContext> sessions_;
         std::vector<StorageNodeEndpoint> storage_nodes_;
         mutable std::mutex nodes_mutex_;
+        mutable std::mutex pending_transactions_mutex_;
+        std::unordered_map<std::string, PendingClusterTransaction>
+            pending_cluster_transactions_;
         std::string access_log_path_;
         mutable std::mutex access_log_mutex_;
     };

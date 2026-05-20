@@ -201,6 +201,15 @@ namespace dbms::server {
         }
 
         if (!nodes_snapshot.empty()) {
+            if (IsMutatingStatement(statement)) {
+                auto tx_result = ExecuteTwoPhaseCommit(nodes_snapshot, request);
+                if (!tx_result.has_value()) {
+                    return finalize({.status_code = 502,
+                                     .payload = "type=NETWORK_ERROR code=6 message=cluster 2pc failed sql=\"\""});
+                }
+                return finalize(*tx_result);
+            }
+
             if (ShouldBroadcast(statement)) {
                 std::string merged_unused;
                 auto broadcast_result =
@@ -283,6 +292,84 @@ namespace dbms::server {
 
     bool EntrypointServer::ParseClusterCommand(
         const std::string &payload, network::ResponseEnvelope &response) {
+        const std::string prepare_prefix = "CLUSTER PREPARE_TX ";
+        if (payload.rfind(prepare_prefix, 0) == 0) {
+            const auto rest = payload.substr(prepare_prefix.size());
+            const auto split = rest.find(' ');
+            if (split == std::string::npos) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=missing tx id/sql sql=\"\""};
+                return true;
+            }
+            const std::string tx_id = rest.substr(0, split);
+            const std::string sql = rest.substr(split + 1);
+            if (tx_id.empty() || sql.empty()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=missing tx id/sql sql=\"\""};
+                return true;
+            }
+            auto parsed = parser_.Parse(sql);
+            if (!parsed.ok()) {
+                response = {.status_code = 400,
+                            .payload = common::FormatErrorContract(*parsed.error, sql)};
+                return true;
+            }
+            if (!IsMutatingStatement(*parsed.value)) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=PREPARE_TX requires mutating sql sql=\"\""};
+                return true;
+            }
+            std::lock_guard<std::mutex> lock(pending_transactions_mutex_);
+            pending_cluster_transactions_[tx_id] =
+                PendingClusterTransaction{.sql = sql, .client_id = "__cluster_tx__"};
+            response = {.status_code = 200, .payload = "prepared"};
+            return true;
+        }
+        const std::string commit_prefix = "CLUSTER COMMIT_TX ";
+        if (payload.rfind(commit_prefix, 0) == 0) {
+            const std::string tx_id = payload.substr(commit_prefix.size());
+            if (tx_id.empty()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=missing tx id sql=\"\""};
+                return true;
+            }
+            PendingClusterTransaction pending;
+            {
+                std::lock_guard<std::mutex> lock(pending_transactions_mutex_);
+                auto it = pending_cluster_transactions_.find(tx_id);
+                if (it == pending_cluster_transactions_.end()) {
+                    response = {.status_code = 404,
+                                .payload = "type=NOT_FOUND code=7 message=unknown tx id sql=\"\""};
+                    return true;
+                }
+                pending = it->second;
+                pending_cluster_transactions_.erase(it);
+            }
+            auto &session = GetOrCreateSession(pending.client_id);
+            auto result = engine_.ExecuteSql(session, pending.sql);
+            if (!result.ok()) {
+                response = {.status_code = 400,
+                            .payload =
+                                common::FormatErrorContract(*result.error, pending.sql)};
+                return true;
+            }
+            response = {.status_code = 200, .payload = result.value->message};
+            return true;
+        }
+        const std::string abort_prefix = "CLUSTER ABORT_TX ";
+        if (payload.rfind(abort_prefix, 0) == 0) {
+            const std::string tx_id = payload.substr(abort_prefix.size());
+            if (tx_id.empty()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=missing tx id sql=\"\""};
+                return true;
+            }
+            std::lock_guard<std::mutex> lock(pending_transactions_mutex_);
+            pending_cluster_transactions_.erase(tx_id);
+            response = {.status_code = 200, .payload = "aborted"};
+            return true;
+        }
+
         const auto tokens = SplitWhitespace(payload);
         if (tokens.size() < 2 || ToUpper(tokens[0]) != "CLUSTER") {
             return false;
@@ -595,6 +682,12 @@ namespace dbms::server {
         return std::holds_alternative<parser::SelectStatement>(statement);
     }
 
+    bool EntrypointServer::IsMutatingStatement(const parser::Statement &statement) const {
+        return !std::holds_alternative<parser::SelectStatement>(statement) &&
+               !std::holds_alternative<parser::UseDatabaseStatement>(statement) &&
+               !std::holds_alternative<parser::UnknownStatement>(statement);
+    }
+
     std::string
     EntrypointServer::QueryResultToJson(const execution::QueryResult &result) const {
         std::ostringstream output;
@@ -684,6 +777,40 @@ namespace dbms::server {
         merged << "]";
         merged_json = merged.str();
         return network::ResponseEnvelope{.status_code = 200, .payload = merged_json};
+    }
+
+    std::optional<network::ResponseEnvelope>
+    EntrypointServer::ExecuteTwoPhaseCommit(
+        const std::vector<StorageNodeEndpoint> &nodes,
+        const network::RequestEnvelope &request) const {
+        const std::string tx_id = common::UuidGenerator::NewGuidV4();
+
+        std::vector<StorageNodeEndpoint> prepared_nodes;
+        for (const auto &node : nodes) {
+            network::RequestEnvelope prepare_request = request;
+            prepare_request.payload =
+                "CLUSTER PREPARE_TX " + tx_id + " " + request.payload;
+            auto prepare_response = ForwardToStorageNode(node, prepare_request);
+            if (!prepare_response.has_value() || prepare_response->status_code != 200) {
+                for (const auto &prepared : prepared_nodes) {
+                    network::RequestEnvelope abort_request = request;
+                    abort_request.payload = "CLUSTER ABORT_TX " + tx_id;
+                    (void)ForwardToStorageNode(prepared, abort_request);
+                }
+                return std::nullopt;
+            }
+            prepared_nodes.push_back(node);
+        }
+
+        for (const auto &node : prepared_nodes) {
+            network::RequestEnvelope commit_request = request;
+            commit_request.payload = "CLUSTER COMMIT_TX " + tx_id;
+            auto commit_response = ForwardToStorageNode(node, commit_request);
+            if (!commit_response.has_value() || commit_response->status_code != 200) {
+                return std::nullopt;
+            }
+        }
+        return network::ResponseEnvelope{.status_code = 200, .payload = "2pc committed"};
     }
 
     bool EntrypointServer::RunHeartbeatCycle() {
