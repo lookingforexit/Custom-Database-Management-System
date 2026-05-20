@@ -39,13 +39,14 @@ int main() {
     if (!std::filesystem::exists(root_path / "version_history.tsv")) return 1;
 
     // Audit condition: no extra snapshot dump files are created for point-in-time
-    // restore; only state + history are used.
+    // restore; state + history + wal are used.
     for (const auto &entry : std::filesystem::directory_iterator(root_path)) {
         if (!entry.is_regular_file()) {
             continue;
         }
         const auto filename = entry.path().filename().string();
-        if (filename == "runtime_state.tsv" || filename == "version_history.tsv") {
+        if (filename == "runtime_state.tsv" || filename == "version_history.tsv" ||
+            filename == "wal.log") {
             continue;
         }
         // Temporary files may appear only transiently during save; after operation

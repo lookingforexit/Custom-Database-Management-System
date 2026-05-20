@@ -6,12 +6,21 @@ namespace dbms::core {
     DbmsEngine::DbmsEngine(std::string root_path)
         : root_path_(std::move(root_path)), catalog_(root_path_),
           execution_(catalog_, runtime_state_, version_store_, string_pool_),
-          persistence_(root_path_) {
+          persistence_(root_path_), wal_(root_path_) {
         persistence_.Load(runtime_state_, version_store_);
+        if (!ReplayWal()) {
+            wal_.QuarantineCorrupted();
+        }
     }
 
     common::Result<execution::QueryResult>
     DbmsEngine::ExecuteSql(SessionContext &session, const std::string &sql) {
+        return ExecuteSqlImpl(session, sql, true);
+    }
+
+    common::Result<execution::QueryResult>
+    DbmsEngine::ExecuteSqlImpl(SessionContext &session, const std::string &sql,
+                               bool write_wal) {
         auto parsed = parser_.Parse(sql);
         if (!parsed.ok()) {
             return {.value = std::nullopt, .error = parsed.error};
@@ -29,6 +38,7 @@ namespace dbms::core {
             TransactionContext context;
             context.working_state = CloneRuntimeState(runtime_state_);
             context.working_version_store = version_store_;
+            context.wal_statements.clear();
             transactions_.emplace(transaction_key, std::move(context));
 
             execution::QueryResult result;
@@ -47,8 +57,21 @@ namespace dbms::core {
             runtime_state_ = std::move(transaction_it->second.working_state);
             version_store_ =
                 std::move(transaction_it->second.working_version_store);
+            if (write_wal &&
+                !transaction_it->second.wal_statements.empty() &&
+                !wal_.AppendTransaction(transaction_it->second.wal_statements)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kStorageError, "failed to append WAL TX");
+            }
             transactions_.erase(transaction_it);
-            persistence_.Save(runtime_state_, version_store_);
+            if (!persistence_.Save(runtime_state_, version_store_)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kStorageError, "failed to persist state");
+            }
+            if (write_wal && !wal_.Reset()) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kStorageError, "failed to checkpoint WAL");
+            }
 
             execution::QueryResult result;
             result.message = "transaction committed";
@@ -84,7 +107,12 @@ namespace dbms::core {
             execution::ExecutionEngine transactional_execution(
                 catalog_, transaction_it->second.working_state,
                 transaction_it->second.working_version_store, string_pool_);
-            return transactional_execution.Execute(session, *plan.value);
+            auto tx_result = transactional_execution.Execute(session, *plan.value);
+            if (tx_result.ok() && write_wal &&
+                IsMutatingStatement(*plan.value->statement)) {
+                transaction_it->second.wal_statements.push_back(sql);
+            }
+            return tx_result;
         }
 
         auto plan = planner_.BuildPlan(std::move(*parsed.value));
@@ -98,7 +126,18 @@ namespace dbms::core {
         }
 
         if (IsMutatingStatement(*plan.value->statement)) {
-            persistence_.Save(runtime_state_, version_store_);
+            if (write_wal && !wal_.AppendSql(sql)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kStorageError, "failed to append WAL SQL");
+            }
+            if (!persistence_.Save(runtime_state_, version_store_)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kStorageError, "failed to persist state");
+            }
+            if (write_wal && !wal_.Reset()) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kStorageError, "failed to checkpoint WAL");
+            }
         }
         return execution_result;
     }
@@ -136,6 +175,50 @@ namespace dbms::core {
             return session.client_id;
         }
         return "__default_session__";
+    }
+
+    bool DbmsEngine::ReplayWal() {
+        std::vector<WalEntry> entries;
+        if (!wal_.LoadAll(entries)) {
+            return false;
+        }
+        if (entries.empty()) {
+            wal_.Reset();
+            return true;
+        }
+
+        SessionContext recovery_session;
+        recovery_session.client_id = "__wal_recovery__";
+        for (const auto &entry : entries) {
+            if (entry.type == WalEntry::Type::kSql) {
+                if (entry.statements.empty()) {
+                    continue;
+                }
+                auto result =
+                    ExecuteSqlImpl(recovery_session, entry.statements.front(), false);
+                if (!result.ok()) {
+                    return false;
+                }
+                continue;
+            }
+            auto begin = ExecuteSqlImpl(recovery_session, "BEGIN;", false);
+            if (!begin.ok()) {
+                return false;
+            }
+            for (const auto &statement : entry.statements) {
+                auto tx_result = ExecuteSqlImpl(recovery_session, statement, false);
+                if (!tx_result.ok()) {
+                    ExecuteSqlImpl(recovery_session, "ROLLBACK;", false);
+                    return false;
+                }
+            }
+            auto commit = ExecuteSqlImpl(recovery_session, "COMMIT;", false);
+            if (!commit.ok()) {
+                return false;
+            }
+        }
+        wal_.Reset();
+        return true;
     }
 
 } // namespace dbms::core

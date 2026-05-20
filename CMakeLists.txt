@@ -16,6 +16,7 @@ add_library(dbms_core
     src/core/dbms_engine.cpp
     src/core/runtime_state.cpp
     src/core/runtime_persistence.cpp
+    src/core/wal_manager.cpp
     src/execution/execution_engine.cpp
     src/index/b_star_plus_tree.cpp
     src/network/protocol.cpp
@@ -156,3 +157,7 @@ add_test(NAME dbms_parser_edge_cases COMMAND dbms_parser_edge_cases)
 add_executable(dbms_server_api_edge_cases tests/server_api_edge_cases.cpp)
 target_link_libraries(dbms_server_api_edge_cases PRIVATE dbms_core)
 add_test(NAME dbms_server_api_edge_cases COMMAND dbms_server_api_edge_cases)
+
+add_executable(dbms_wal_recovery tests/wal_recovery.cpp)
+target_link_libraries(dbms_wal_recovery PRIVATE dbms_core)
+add_test(NAME dbms_wal_recovery COMMAND dbms_wal_recovery)

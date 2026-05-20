@@ -12,7 +12,9 @@
 #include "session_context.hpp"
 #include "storage/string_pool.hpp"
 #include "versioning/version_store.hpp"
+#include "wal_manager.hpp"
 #include <unordered_map>
+#include <vector>
 
 namespace dbms::core {
 
@@ -32,6 +34,7 @@ namespace dbms::core {
         struct TransactionContext {
             RuntimeState working_state;
             versioning::VersionStore working_version_store;
+            std::vector<std::string> wal_statements;
         };
 
         [[nodiscard]] bool IsMutatingStatement(
@@ -40,6 +43,10 @@ namespace dbms::core {
             const parser::Statement &statement) const;
         [[nodiscard]] std::string TransactionKey(
             const SessionContext &session) const;
+        common::Result<execution::QueryResult>
+        ExecuteSqlImpl(SessionContext &session, const std::string &sql,
+                       bool write_wal);
+        bool ReplayWal();
 
         std::string root_path_;
         RuntimeState runtime_state_;
@@ -52,6 +59,7 @@ namespace dbms::core {
         storage::StringPool string_pool_;
         execution::ExecutionEngine execution_;
         RuntimePersistence persistence_;
+        WalManager wal_;
     };
 
 } // namespace dbms::core
