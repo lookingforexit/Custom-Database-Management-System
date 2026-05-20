@@ -1,6 +1,8 @@
 #include "core/dbms_engine.hpp"
 
 // this file wires parser, planner, and executor into one dbms request pipeline.
+#include <algorithm>
+#include <cctype>
 namespace dbms::core {
 
     DbmsEngine::DbmsEngine(std::string root_path)
@@ -21,6 +23,38 @@ namespace dbms::core {
     common::Result<execution::QueryResult>
     DbmsEngine::ExecuteSqlImpl(SessionContext &session, const std::string &sql,
                                bool write_wal) {
+        if (const auto command = NormalizeServiceCommand(sql); command.has_value()) {
+            execution::QueryResult result;
+            const auto transaction_key = TransactionKey(session);
+            if (transactions_.contains(transaction_key)) {
+                return common::MakeError<execution::QueryResult>(
+                    common::ErrorCode::kValidationError,
+                    "service index commands are not allowed inside active transaction");
+            }
+            if (*command == "CHECK INDEX") {
+                auto check = ValidateRuntimeIndexConsistency(runtime_state_);
+                if (!check.ok()) {
+                    return common::MakeError<execution::QueryResult>(
+                        check.error->code, check.error->message);
+                }
+                result.message = "index check passed";
+                return common::MakeSuccess(std::move(result));
+            }
+            if (*command == "REBUILD INDEX") {
+                auto rebuilt = RebuildRuntimeIndexes(runtime_state_);
+                if (!rebuilt.ok()) {
+                    return common::MakeError<execution::QueryResult>(
+                        rebuilt.error->code, rebuilt.error->message);
+                }
+                if (!persistence_.Save(runtime_state_, version_store_)) {
+                    return common::MakeError<execution::QueryResult>(
+                        common::ErrorCode::kStorageError, "failed to persist state");
+                }
+                result.message = "index rebuild completed";
+                return common::MakeSuccess(std::move(result));
+            }
+        }
+
         auto parsed = parser_.Parse(sql);
         if (!parsed.ok()) {
             return {.value = std::nullopt, .error = parsed.error};
@@ -219,6 +253,33 @@ namespace dbms::core {
         }
         wal_.Reset();
         return true;
+    }
+
+    std::optional<std::string>
+    DbmsEngine::NormalizeServiceCommand(const std::string &sql) const {
+        std::string normalized;
+        normalized.reserve(sql.size());
+        for (char ch : sql) {
+            if (ch == ';') {
+                continue;
+            }
+            if (std::isspace(static_cast<unsigned char>(ch))) {
+                if (normalized.empty() || normalized.back() == ' ') {
+                    continue;
+                }
+                normalized.push_back(' ');
+                continue;
+            }
+            normalized.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch))));
+        }
+        while (!normalized.empty() && normalized.back() == ' ') {
+            normalized.pop_back();
+        }
+        if (normalized == "CHECK INDEX" || normalized == "REBUILD INDEX") {
+            return normalized;
+        }
+        return std::nullopt;
     }
 
 } // namespace dbms::core

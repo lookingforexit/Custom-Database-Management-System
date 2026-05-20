@@ -161,3 +161,7 @@ add_test(NAME dbms_server_api_edge_cases COMMAND dbms_server_api_edge_cases)
 add_executable(dbms_wal_recovery tests/wal_recovery.cpp)
 target_link_libraries(dbms_wal_recovery PRIVATE dbms_core)
 add_test(NAME dbms_wal_recovery COMMAND dbms_wal_recovery)
+
+add_executable(dbms_index_service tests/index_service.cpp)
+target_link_libraries(dbms_index_service PRIVATE dbms_core)
+add_test(NAME dbms_index_service COMMAND dbms_index_service)

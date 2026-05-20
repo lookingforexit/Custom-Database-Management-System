@@ -34,5 +34,7 @@ namespace dbms::core {
     [[nodiscard]] RuntimeState CloneRuntimeState(const RuntimeState &source);
     [[nodiscard]] common::Result<bool>
     ValidateRuntimeIndexConsistency(const RuntimeState &runtime_state);
+    [[nodiscard]] common::Result<bool>
+    RebuildRuntimeIndexes(RuntimeState &runtime_state);
 
 } // namespace dbms::core

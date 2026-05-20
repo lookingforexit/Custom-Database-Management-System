@@ -156,4 +156,40 @@ namespace dbms::core {
         return common::MakeSuccess(true);
     }
 
+    common::Result<bool> RebuildRuntimeIndexes(RuntimeState &runtime_state) {
+        for (auto &[database_name, database_runtime] : runtime_state.databases) {
+            for (auto &[table_name, table_runtime] : database_runtime.tables) {
+                table_runtime.indexes.clear();
+                for (const auto &index_definition : table_runtime.schema.indexes) {
+                    table_runtime.indexes.emplace(
+                        index_definition.column_name,
+                        std::make_unique<index::BStarPlusTree>());
+                }
+                const auto rows = table_runtime.heap->ScanAll();
+                for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+                    const auto &row = rows[row_index];
+                    for (auto &[indexed_column_name, index_tree] :
+                         table_runtime.indexes) {
+                        const auto column_index = FindColumnIndex(table_runtime.schema,
+                                                                  indexed_column_name);
+                        if (!column_index.has_value()) {
+                            return common::MakeError<bool>(
+                                common::ErrorCode::kStorageError,
+                                "indexed column missing in schema during rebuild: " +
+                                    database_name + "." + table_name + "." +
+                                    indexed_column_name);
+                        }
+                        const auto encoded =
+                            EncodeIndexKey(row.values[*column_index],
+                                           table_runtime.schema.columns[*column_index]
+                                               .type);
+                        index_tree->Insert(encoded,
+                                           static_cast<common::RowId>(row_index));
+                    }
+                }
+            }
+        }
+        return ValidateRuntimeIndexConsistency(runtime_state);
+    }
+
 } // namespace dbms::core
