@@ -30,6 +30,7 @@
 - `src/execution` — выполнение DDL/DML/SELECT/REVERT/tx.
 - `src/index` — канонический B\*+\-tree.
 - `src/core` — `DbmsEngine`, runtime state, persistence, WAL.
+- `src/core` — `DbmsEngine`, runtime state, persistence, WAL и session-scoped транзакции (без отдельного `transaction` модуля).
 - `src/versioning` — история снимков таблиц для `REVERT`.
 - `src/server` + `src/network` — entrypoint и TCP протокол.
 - `apps/cli` — локальный/удаленный CLI.
@@ -158,6 +159,13 @@ One-shot проверка:
 ```bash
 ./verify.sh
 ./verify.sh --dry-run
+```
+
+Эквивалент вручную:
+```bash
+cmake -S . -B build
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
 ```
 
 Полный прогон:
