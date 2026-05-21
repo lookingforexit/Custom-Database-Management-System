@@ -28,10 +28,8 @@ add_library(dbms_core
     src/runtime/job_queue.cpp
     src/runtime/telemetry.cpp
     src/server/entrypoint.cpp
-    src/storage/page_manager.cpp
     src/storage/string_pool.cpp
     src/storage/table_heap.cpp
-    src/transaction/transaction_manager.cpp
     src/versioning/version_store.cpp
 )
 

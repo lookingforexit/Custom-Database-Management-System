@@ -1,7 +1,10 @@
 #include "server/entrypoint.hpp"
+#include <filesystem>
 
 int main() {
-    dbms::server::EntrypointServer server("./test_data_cluster_entrypoint");
+    const std::string root = "./test_data_cluster_entrypoint";
+    std::filesystem::remove_all(root);
+    dbms::server::EntrypointServer server(root);
 
     dbms::network::RequestEnvelope request{
         .client_id = "cluster",
@@ -65,5 +68,6 @@ int main() {
     if (response.status_code != 200) return 1;
     if (response.payload.find("nodes=0") == std::string::npos) return 1;
 
+    std::filesystem::remove_all(root);
     return 0;
 }
