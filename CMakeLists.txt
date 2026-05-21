@@ -11,7 +11,6 @@ find_package(OpenSSL REQUIRED)
 add_library(dbms_core
     src/catalog/catalog.cpp
     src/catalog/rbac.cpp
-    src/catalog/schema.cpp
     src/common/error_contract.cpp
     src/common/uuid.cpp
     src/common/types.cpp
