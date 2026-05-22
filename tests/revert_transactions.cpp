@@ -43,13 +43,13 @@ int main() {
     auto a_view = engine.ExecuteSql(session_a, "SELECT name FROM t WHERE id == 1;");
     auto b_view = engine.ExecuteSql(session_b, "SELECT name FROM t WHERE id == 1;");
     if (!a_view.ok() || !b_view.ok()) return 1;
-    if (std::get<std::string>(a_view.value->rows[0].values[0]) != "A") return 1;
-    if (std::get<std::string>(b_view.value->rows[0].values[0]) != "B") return 1;
+    if (dbms::common::AsString(a_view.value->rows[0].values[0]) != "A") return 1;
+    if (dbms::common::AsString(b_view.value->rows[0].values[0]) != "B") return 1;
     if (!engine.ExecuteSql(session_a, "ROLLBACK;").ok()) return 1;
     auto after_rollback =
         engine.ExecuteSql(session_a, "SELECT name FROM t WHERE id == 1;");
     if (!after_rollback.ok()) return 1;
-    if (std::get<std::string>(after_rollback.value->rows[0].values[0]) != "B") {
+    if (dbms::common::AsString(after_rollback.value->rows[0].values[0]) != "B") {
         return 1;
     }
 
@@ -62,7 +62,7 @@ int main() {
     auto after_commit_b =
         engine.ExecuteSql(session_b, "SELECT name FROM t WHERE id == 1;");
     if (!after_commit_b.ok()) return 1;
-    if (std::get<std::string>(after_commit_b.value->rows[0].values[0]) != "A") {
+    if (dbms::common::AsString(after_commit_b.value->rows[0].values[0]) != "A") {
         return 1;
     }
 

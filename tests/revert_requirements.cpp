@@ -37,7 +37,7 @@ int main() {
         auto value = engine.ExecuteSql(session, "SELECT name FROM t WHERE id == 1;");
         assert(value.ok());
         assert(value.value->rows.size() == 1);
-        assert(std::get<std::string>(value.value->rows[0].values[0]) == "A");
+        assert(dbms::common::AsString(value.value->rows[0].values[0]) == "A");
 
         auto invalid_timestamp =
             engine.ExecuteSql(session, "REVERT t EXACT \"bad-timestamp\";");
@@ -105,8 +105,9 @@ int main() {
 
         dbms::core::RuntimeState runtime_state;
         dbms::versioning::VersionStore version_store;
+        dbms::storage::StringPool string_pool;
         dbms::core::RuntimePersistence persistence(root);
-        assert(!persistence.Load(runtime_state, version_store));
+        assert(!persistence.Load(runtime_state, version_store, string_pool));
 
         {
             std::ofstream history(root + "/version_history.tsv", std::ios::trunc);
@@ -115,7 +116,7 @@ int main() {
             history << "SNAPSHOT_ROW\tI:1\tS:A\n";
             // Missing CHANGE_END -> malformed.
         }
-        assert(!persistence.Load(runtime_state, version_store));
+        assert(!persistence.Load(runtime_state, version_store, string_pool));
 
         std::filesystem::remove_all(root);
     }

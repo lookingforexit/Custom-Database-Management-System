@@ -82,9 +82,9 @@ int main() {
         auto after_revert =
             engine.ExecuteSql(session, "SELECT name FROM t WHERE id == 1;");
         if (!after_revert.ok() || after_revert.value->rows.size() != 1 ||
-            !std::holds_alternative<std::string>(
-                after_revert.value->rows[0].values[0]) ||
-            std::get<std::string>(after_revert.value->rows[0].values[0]) != "A") {
+            dbms::common::GetValueType(after_revert.value->rows[0].values[0]) !=
+                dbms::common::ValueType::kString ||
+            dbms::common::AsString(after_revert.value->rows[0].values[0]) != "A") {
             std::cout << "revert_persistence_error: wrong_value_after_revert\n";
             return 1;
         }

@@ -44,7 +44,7 @@ namespace {
         if (std::holds_alternative<std::int64_t>(value)) {
             return std::to_string(std::get<std::int64_t>(value));
         }
-        return "\"" + dbms::common::EscapeJsonText(std::get<std::string>(value)) +
+        return "\"" + dbms::common::EscapeJsonText(dbms::common::AsString(value)) +
                "\"";
     }
 

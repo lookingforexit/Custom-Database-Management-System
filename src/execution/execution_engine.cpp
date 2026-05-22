@@ -68,7 +68,7 @@ namespace dbms::execution {
                        << ordered_value;
                 return output.str();
             }
-            return "S" + std::get<std::string>(value);
+            return "S" + common::AsString(value);
         }
 
         common::Result<bool> ValidateRowAgainstSchema(
@@ -108,8 +108,7 @@ namespace dbms::execution {
                     std::make_unique<index::BStarPlusTree>());
             }
 
-            for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
-                const auto &row = rows[row_index];
+            for (const auto &row : rows) {
                 for (auto &[column_name, index_tree] : rebuilt_indexes) {
                     auto column_index =
                         FindColumnIndex(table_runtime.schema, column_name);
@@ -131,7 +130,7 @@ namespace dbms::execution {
                             common::ErrorCode::kConstraintViolation,
                             "duplicate value for INDEXED column: " + column_name);
                     }
-                    index_tree->Insert(key, static_cast<common::RowId>(row_index));
+                    index_tree->Insert(key, row.row_id);
                 }
             }
 
@@ -145,8 +144,7 @@ namespace dbms::execution {
                 if (!std::holds_alternative<std::string>(value)) {
                     continue;
                 }
-                const auto interned_id = string_pool.Intern(std::get<std::string>(value));
-                value = string_pool.Resolve(interned_id);
+                value = string_pool.Intern(std::get<std::string>(value));
             }
         }
 
@@ -263,9 +261,9 @@ namespace dbms::execution {
                         common::ErrorCode::kTypeMismatch,
                         "LIKE accepts only string operands");
                 }
-                const std::regex re(std::get<std::string>(*pattern.value));
+                const std::regex re(common::AsString(*pattern.value));
                 return common::MakeSuccess(
-                    std::regex_match(std::get<std::string>(*value.value), re));
+                    std::regex_match(common::AsString(*value.value), re));
             }
 
             auto truthy = EvaluateValueExpression(expr, schema, row);
@@ -280,7 +278,7 @@ namespace dbms::execution {
                 return common::MakeSuccess(std::get<std::int64_t>(*truthy.value) !=
                                            0);
             }
-            return common::MakeSuccess(!std::get<std::string>(*truthy.value).empty());
+            return common::MakeSuccess(!common::AsString(*truthy.value).empty());
         }
 
         common::Result<common::Value>
@@ -321,11 +319,18 @@ namespace dbms::execution {
                 *used_index_path = false;
             }
 
-            auto append_if_passes = [&](std::size_t row_index) -> common::Result<bool> {
-                if (row_index >= rows.size()) {
+            std::unordered_map<common::RowId, const common::RowData *> row_lookup;
+            row_lookup.reserve(rows.size());
+            for (const auto &row : rows) {
+                row_lookup.emplace(row.row_id, &row);
+            }
+
+            auto append_if_passes = [&](common::RowId row_id) -> common::Result<bool> {
+                const auto lookup_it = row_lookup.find(row_id);
+                if (lookup_it == row_lookup.end()) {
                     return common::MakeSuccess(true);
                 }
-                const auto &row = rows[row_index];
+                const auto &row = *lookup_it->second;
                 if (where_clause.has_value()) {
                     auto pass = EvaluatePredicate(*where_clause, schema, row);
                     if (!pass.ok()) {
@@ -392,8 +397,7 @@ namespace dbms::execution {
                                     break;
                             }
                             for (auto row_id : candidate_row_ids) {
-                                auto append_result = append_if_passes(
-                                    static_cast<std::size_t>(row_id));
+                                auto append_result = append_if_passes(row_id);
                                 if (!append_result.ok()) {
                                     return common::MakeError<
                                         std::vector<common::RowData>>(
@@ -441,8 +445,7 @@ namespace dbms::execution {
                                 index_it->second->RangeScan(lower_key, upper_key);
                             for (const auto &entry : entries) {
                                 for (auto row_id : entry.row_ids) {
-                                    auto append_result = append_if_passes(
-                                        static_cast<std::size_t>(row_id));
+                                    auto append_result = append_if_passes(row_id);
                                     if (!append_result.ok()) {
                                         return common::MakeError<
                                             std::vector<common::RowData>>(

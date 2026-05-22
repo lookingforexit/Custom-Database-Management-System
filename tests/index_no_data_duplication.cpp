@@ -33,11 +33,11 @@ int main() {
         auto select_before =
             engine.ExecuteSql(session, "SELECT name, score FROM users WHERE id == 2;");
         if (!select_before.ok() || select_before.value->rows.size() != 1 ||
-            !std::holds_alternative<std::string>(
-                select_before.value->rows[0].values[0]) ||
+            dbms::common::GetValueType(select_before.value->rows[0].values[0]) !=
+                dbms::common::ValueType::kString ||
             !std::holds_alternative<std::int64_t>(
                 select_before.value->rows[0].values[1]) ||
-            std::get<std::string>(select_before.value->rows[0].values[0]) != "Bob" ||
+            dbms::common::AsString(select_before.value->rows[0].values[0]) != "Bob" ||
             std::get<std::int64_t>(select_before.value->rows[0].values[1]) != 20) {
             return 1;
         }
@@ -52,7 +52,7 @@ int main() {
         auto select_after =
             engine.ExecuteSql(session, "SELECT name, score FROM users WHERE id == 2;");
         if (!select_after.ok() || select_after.value->rows.size() != 1 ||
-            std::get<std::string>(select_after.value->rows[0].values[0]) != "Bobby" ||
+            dbms::common::AsString(select_after.value->rows[0].values[0]) != "Bobby" ||
             std::get<std::int64_t>(select_after.value->rows[0].values[1]) != 99) {
             return 1;
         }
@@ -73,7 +73,7 @@ int main() {
         auto select_after_restart =
             engine.ExecuteSql(session, "SELECT name, score FROM users WHERE id == 2;");
         if (!select_after_restart.ok() || select_after_restart.value->rows.size() != 1 ||
-            std::get<std::string>(select_after_restart.value->rows[0].values[0]) !=
+            dbms::common::AsString(select_after_restart.value->rows[0].values[0]) !=
                 "Bobby" ||
             std::get<std::int64_t>(select_after_restart.value->rows[0].values[1]) !=
                 99) {

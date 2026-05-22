@@ -89,9 +89,9 @@ int main() {
             !std::holds_alternative<std::int64_t>(
                 indexed_select.value->rows[0].values[1]) ||
             std::get<std::int64_t>(indexed_select.value->rows[0].values[1]) != 30 ||
-            !std::holds_alternative<std::string>(
-                indexed_select.value->rows[0].values[2]) ||
-            std::get<std::string>(indexed_select.value->rows[0].values[2]) != "Bob") {
+            dbms::common::GetValueType(indexed_select.value->rows[0].values[2]) !=
+                dbms::common::ValueType::kString ||
+            dbms::common::AsString(indexed_select.value->rows[0].values[2]) != "Bob") {
             std::cout << "persistence_error: indexed_select_mismatch\n";
             if (indexed_select.ok()) {
                 std::cout << "row_count=" << indexed_select.value->rows.size()

@@ -77,8 +77,8 @@ int main() {
     }
     result = engine.ExecuteSql(session, "SELECT name FROM test WHERE id == 1;");
     if (!result.ok() || result.value->rows.size() != 1 ||
-        !std::holds_alternative<std::string>(result.value->rows[0].values[0]) ||
-        std::get<std::string>(result.value->rows[0].values[0]) != "Bob") {
+        GetValueType(result.value->rows[0].values[0]) != ValueType::kString ||
+        AsString(result.value->rows[0].values[0]) != "Bob") {
         std::cout << "pipeline_error\n";
         return 1;
     }

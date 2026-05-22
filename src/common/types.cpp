@@ -18,7 +18,7 @@ namespace dbms::common {
             return std::get<int64_t>(lhs) - std::get<int64_t>(rhs);
         }
 
-        return std::get<std::string>(lhs).compare(std::get<std::string>(rhs));
+        return AsString(lhs).compare(AsString(rhs));
     }
 
     ValueType GetValueType(const Value &value) {
@@ -38,7 +38,7 @@ namespace dbms::common {
         if (std::holds_alternative<std::int64_t>(value)) {
             return std::to_string(std::get<std::int64_t>(value));
         }
-        return std::get<std::string>(value);
+        return std::string(AsString(value));
     }
 
     bool CanAssignToType(const Value &value, ValueType type, bool allow_null) {

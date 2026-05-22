@@ -714,7 +714,7 @@ namespace dbms::server {
                     output << std::get<std::int64_t>(value);
                 } else {
                     output << "\""
-                           << common::EscapeJsonText(std::get<std::string>(value))
+                           << common::EscapeJsonText(common::AsString(value))
                            << "\"";
                 }
             }

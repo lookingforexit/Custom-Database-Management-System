@@ -42,16 +42,18 @@ int main() {
     auto row_1 = engine.ExecuteSql(
         session, "SELECT name, score, note FROM cfg WHERE id == 1;");
     if (!row_1.ok() || row_1.value->rows.size() != 1) return 1;
-    if (!std::holds_alternative<std::string>(row_1.value->rows[0].values[0]) ||
-        std::get<std::string>(row_1.value->rows[0].values[0]) != "guest") {
+    if (dbms::common::GetValueType(row_1.value->rows[0].values[0]) !=
+            dbms::common::ValueType::kString ||
+        dbms::common::AsString(row_1.value->rows[0].values[0]) != "guest") {
         return 1;
     }
     if (!std::holds_alternative<std::int64_t>(row_1.value->rows[0].values[1]) ||
         std::get<std::int64_t>(row_1.value->rows[0].values[1]) != 0) {
         return 1;
     }
-    if (!std::holds_alternative<std::string>(row_1.value->rows[0].values[2]) ||
-        std::get<std::string>(row_1.value->rows[0].values[2]) != "n1") {
+    if (dbms::common::GetValueType(row_1.value->rows[0].values[2]) !=
+            dbms::common::ValueType::kString ||
+        dbms::common::AsString(row_1.value->rows[0].values[2]) != "n1") {
         return 1;
     }
 
@@ -63,8 +65,9 @@ int main() {
     auto row_2 = engine.ExecuteSql(
         session, "SELECT name, score FROM cfg WHERE id == 2;");
     if (!row_2.ok() || row_2.value->rows.size() != 1) return 1;
-    if (!std::holds_alternative<std::string>(row_2.value->rows[0].values[0]) ||
-        std::get<std::string>(row_2.value->rows[0].values[0]) != "guest") {
+    if (dbms::common::GetValueType(row_2.value->rows[0].values[0]) !=
+            dbms::common::ValueType::kString ||
+        dbms::common::AsString(row_2.value->rows[0].values[0]) != "guest") {
         return 1;
     }
     if (!std::holds_alternative<std::int64_t>(row_2.value->rows[0].values[1]) ||

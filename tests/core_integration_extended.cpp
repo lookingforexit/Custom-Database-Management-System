@@ -59,8 +59,9 @@ int main() {
     auto default_select = engine.ExecuteSql(
         session, "SELECT city FROM users WHERE id == 1;");
     if (!default_select.ok() || default_select.value->rows.size() != 1 ||
-        !std::holds_alternative<std::string>(default_select.value->rows[0].values[0]) ||
-        std::get<std::string>(default_select.value->rows[0].values[0]) != "unknown") {
+        dbms::common::GetValueType(default_select.value->rows[0].values[0]) !=
+            dbms::common::ValueType::kString ||
+        dbms::common::AsString(default_select.value->rows[0].values[0]) != "unknown") {
         return 1;
     }
 

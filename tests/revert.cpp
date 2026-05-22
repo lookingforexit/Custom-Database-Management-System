@@ -65,8 +65,9 @@ int main() {
 
     auto before_revert = engine.ExecuteSql(session, "SELECT name FROM t WHERE id == 1;");
     if (!before_revert.ok() || before_revert.value->rows.size() != 1 ||
-        !std::holds_alternative<std::string>(before_revert.value->rows[0].values[0]) ||
-        std::get<std::string>(before_revert.value->rows[0].values[0]) != "B") {
+        dbms::common::GetValueType(before_revert.value->rows[0].values[0]) !=
+            dbms::common::ValueType::kString ||
+        dbms::common::AsString(before_revert.value->rows[0].values[0]) != "B") {
         std::cout << "revert_error: before_revert_value\n";
         return 1;
     }
@@ -78,8 +79,9 @@ int main() {
 
     auto after_revert = engine.ExecuteSql(session, "SELECT name FROM t WHERE id == 1;");
     if (!after_revert.ok() || after_revert.value->rows.size() != 1 ||
-        !std::holds_alternative<std::string>(after_revert.value->rows[0].values[0]) ||
-        std::get<std::string>(after_revert.value->rows[0].values[0]) != "A") {
+        dbms::common::GetValueType(after_revert.value->rows[0].values[0]) !=
+            dbms::common::ValueType::kString ||
+        dbms::common::AsString(after_revert.value->rows[0].values[0]) != "A") {
         std::cout << "revert_error: after_revert_value\n";
         return 1;
     }

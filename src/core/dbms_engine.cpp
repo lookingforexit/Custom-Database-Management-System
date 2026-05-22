@@ -8,7 +8,7 @@ namespace dbms::core {
         : root_path_(std::move(root_path)), catalog_(root_path_),
           execution_(catalog_, runtime_state_, version_store_, string_pool_),
           persistence_(root_path_), wal_(root_path_) {
-        persistence_.Load(runtime_state_, version_store_);
+        persistence_.Load(runtime_state_, version_store_, string_pool_);
         if (!ReplayWal()) {
             wal_.QuarantineCorrupted();
         }
@@ -65,7 +65,7 @@ namespace dbms::core {
                     common::ErrorCode::kStorageError, "failed to append WAL TX");
             }
             transactions_.erase(transaction_it);
-            if (!persistence_.Save(runtime_state_, version_store_)) {
+            if (!persistence_.Save(runtime_state_, version_store_, string_pool_)) {
                 return common::MakeError<execution::QueryResult>(
                     common::ErrorCode::kStorageError, "failed to persist state");
             }
@@ -137,7 +137,7 @@ namespace dbms::core {
                 return common::MakeError<execution::QueryResult>(
                     common::ErrorCode::kStorageError, "failed to append WAL SQL");
             }
-            if (!persistence_.Save(runtime_state_, version_store_)) {
+            if (!persistence_.Save(runtime_state_, version_store_, string_pool_)) {
                 return common::MakeError<execution::QueryResult>(
                     common::ErrorCode::kStorageError, "failed to persist state");
             }

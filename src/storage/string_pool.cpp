@@ -4,22 +4,17 @@
 // value.
 namespace dbms::storage {
 
-    StringId StringPool::Intern(const std::string &value) {
+    common::InternedString StringPool::Intern(const std::string &value) {
         auto it = index_.find(value);
         if (it != index_.end()) {
             return it->second;
         }
 
-        const StringId id = values_.size();
-        values_.push_back(value);
-        index_.emplace(values_.back(), id);
-        return id;
+        auto owned = std::make_shared<const std::string>(value);
+        index_.emplace(*owned, owned);
+        return owned;
     }
 
-    const std::string &StringPool::Resolve(StringId id) const {
-        return values_.at(id);
-    }
-
-    std::size_t StringPool::UniqueCount() const { return values_.size(); }
+    std::size_t StringPool::UniqueCount() const { return index_.size(); }
 
 } // namespace dbms::storage

@@ -138,7 +138,7 @@ namespace dbms::core {
             if (std::holds_alternative<std::int64_t>(value)) {
                 return "Int:" + std::to_string(std::get<std::int64_t>(value));
             }
-            return "String:" + Escape(std::get<std::string>(value));
+            return "String:" + Escape(common::AsString(value));
         }
 
         bool ParseInteger(const std::string &raw, int &value) {
@@ -199,7 +199,7 @@ namespace dbms::core {
                        << ordered_value;
                 return stream.str();
             }
-            return "S" + std::get<std::string>(value);
+            return "S" + common::AsString(value);
         }
 
     } // namespace
@@ -217,7 +217,8 @@ namespace dbms::core {
 
     bool RuntimePersistence::Save(
         const RuntimeState &runtime_state,
-        const versioning::VersionStore &version_store) const {
+        const versioning::VersionStore &version_store,
+        const storage::StringPool &) const {
         std::filesystem::create_directories(root_path_);
         const auto final_path = StateFilePath();
         const auto temp_path = final_path + ".tmp";
@@ -232,7 +233,7 @@ namespace dbms::core {
         output << "# DATABASE\\tname=<db>\n";
         output << "# TABLE\\tdb=<db>\\tname=<table>\n";
         output << "# COLUMN\\tdb=<db>\\ttable=<table>\\tname=<column>\\ttype=<INT|STRING|NULL>\\tconstraint=<NONE|NOT_NULL|INDEXED>\\tdefault=<value>\n";
-        output << "# ROW\\tdb=<db>\\ttable=<table>\\tvalue=<...>\\tvalue=<...>\n";
+        output << "# ROW\\tdb=<db>\\ttable=<table>\\trow_id=<id>\\tvalue=<...>\\tvalue=<...>\n";
         for (const auto &[database_name, database_runtime] :
              runtime_state.databases) {
             output << "DATABASE\tname=" << Escape(database_name) << "\n";
@@ -257,7 +258,7 @@ namespace dbms::core {
                 const auto rows = table_runtime.heap->ScanAll();
                 for (const auto &row : rows) {
                     output << "ROW\tdb=" << Escape(database_name) << "\ttable="
-                           << Escape(table_name);
+                           << Escape(table_name) << "\trow_id=" << row.row_id;
                     for (const auto &value : row.values) {
                         output << "\tvalue=" << EncodeValue(value);
                     }
@@ -329,7 +330,8 @@ namespace dbms::core {
 
     bool RuntimePersistence::Load(
         RuntimeState &runtime_state,
-        versioning::VersionStore &version_store) const {
+        versioning::VersionStore &version_store,
+        storage::StringPool &string_pool) const {
         std::ifstream input(StateFilePath());
         if (!input.is_open()) {
             return true;
@@ -547,6 +549,15 @@ namespace dbms::core {
                 }
 
                 common::RowData row;
+                const auto row_id_field = FindFieldValue(parts, "row_id");
+                if (row_id_field.has_value()) {
+                    try {
+                        row.row_id =
+                            static_cast<common::RowId>(std::stoull(*row_id_field));
+                    } catch (...) {
+                        return false;
+                    }
+                }
                 for (std::size_t index = value_start_index; index < parts.size();
                      ++index) {
                     std::string encoded_value = parts[index];
@@ -554,7 +565,10 @@ namespace dbms::core {
                         std::string key;
                         std::string value;
                         if (!ParseKeyValueToken(parts[index], key, value) ||
-                            key != "value") {
+                            (key != "value" && key != "row_id")) {
+                            continue;
+                        }
+                        if (key == "row_id") {
                             continue;
                         }
                         encoded_value = value;
@@ -563,7 +577,12 @@ namespace dbms::core {
                     if (!decoded_value.has_value()) {
                         return false;
                     }
-                    row.values.push_back(*decoded_value);
+                    if (std::holds_alternative<std::string>(*decoded_value)) {
+                        row.values.push_back(
+                            string_pool.Intern(std::get<std::string>(*decoded_value)));
+                    } else {
+                        row.values.push_back(*decoded_value);
+                    }
                 }
                 if (row.values.size() != table_it->second.schema.columns.size()) {
                     return false;
@@ -668,7 +687,12 @@ namespace dbms::core {
                     if (!decoded_value.has_value()) {
                         return false;
                     }
-                    row.values.push_back(*decoded_value);
+                    if (std::holds_alternative<std::string>(*decoded_value)) {
+                        row.values.push_back(
+                            string_pool.Intern(std::get<std::string>(*decoded_value)));
+                    } else {
+                        row.values.push_back(*decoded_value);
+                    }
                 }
                 pending_record->snapshot_rows.push_back(std::move(row));
                 continue;
