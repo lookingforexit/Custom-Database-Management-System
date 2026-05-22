@@ -95,11 +95,34 @@ namespace dbms::server {
 
         std::string SanitizeLogField(std::string value) {
             for (char &ch : value) {
-                if (ch == '\n' || ch == '\r' || ch == '\t') {
+                if (ch == '\n' || ch == '\r' || ch == '\t' ||
+                    static_cast<unsigned char>(ch) < 32U) {
                     ch = ' ';
                 }
             }
             return value;
+        }
+
+        std::string FormatUtcTimestamp(
+            std::chrono::system_clock::time_point time_point) {
+            const auto seconds =
+                std::chrono::time_point_cast<std::chrono::seconds>(time_point);
+            const auto millis =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    time_point - seconds)
+                    .count();
+            const std::time_t time_value =
+                std::chrono::system_clock::to_time_t(time_point);
+            std::tm utc_tm{};
+#if defined(_WIN32)
+            gmtime_s(&utc_tm, &time_value);
+#else
+            gmtime_r(&time_value, &utc_tm);
+#endif
+            std::ostringstream timestamp;
+            timestamp << std::put_time(&utc_tm, "%Y-%m-%dT%H:%M:%S") << "."
+                      << std::setw(3) << std::setfill('0') << millis << "Z";
+            return timestamp.str();
         }
 
         std::string EscapeClusterField(const std::string &value) {
@@ -213,9 +236,15 @@ namespace dbms::server {
 
     network::ResponseEnvelope
     EntrypointServer::HandleRequest(const network::RequestEnvelope &request) {
+        const auto started_at_utc = std::chrono::system_clock::now();
         const auto started_at = std::chrono::steady_clock::now();
+        std::ostringstream handler_id_builder;
+        handler_id_builder << "handler-" << std::setw(6) << std::setfill('0')
+                           << next_handler_id_.fetch_add(1);
+        const std::string handler_id = handler_id_builder.str();
         auto finalize = [&](network::ResponseEnvelope response) {
             const auto finished_at = std::chrono::steady_clock::now();
+            const auto finished_at_utc = std::chrono::system_clock::now();
             const auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         finished_at - started_at)
                                         .count();
@@ -224,7 +253,8 @@ namespace dbms::server {
             } else {
                 telemetry_.RecordSuccess(static_cast<double>(latency_ms));
             }
-            WriteAccessLog(request, response, latency_ms);
+            WriteAccessLog(request, response, handler_id, started_at_utc,
+                           finished_at_utc, latency_ms);
             return response;
         };
 
@@ -403,28 +433,22 @@ namespace dbms::server {
     void EntrypointServer::WriteAccessLog(
         const network::RequestEnvelope &request,
         const network::ResponseEnvelope &response,
+        const std::string &handler_id,
+        std::chrono::system_clock::time_point started_at_utc,
+        std::chrono::system_clock::time_point finished_at_utc,
         std::int64_t latency_ms) const {
-        const auto now = std::chrono::system_clock::now();
-        const std::time_t time_value = std::chrono::system_clock::to_time_t(now);
-        std::tm utc_tm{};
-#if defined(_WIN32)
-        gmtime_s(&utc_tm, &time_value);
-#else
-        gmtime_r(&time_value, &utc_tm);
-#endif
-
-        std::ostringstream timestamp;
-        timestamp << std::put_time(&utc_tm, "%Y-%m-%dT%H:%M:%SZ");
-
         std::lock_guard<std::mutex> lock(access_log_mutex_);
         std::ofstream out(access_log_path_, std::ios::app);
         if (!out.is_open()) {
             return;
         }
-        out << "ts=" << timestamp.str() << "\tclient_id="
-            << SanitizeLogField(request.client_id) << "\tstatus="
-            << response.status_code << "\tlatency_ms=" << latency_ms << "\tsql=\""
-            << SanitizeLogField(request.payload) << "\"\n";
+        out << "start=" << FormatUtcTimestamp(started_at_utc)
+            << "\tfinish=" << FormatUtcTimestamp(finished_at_utc)
+            << "\tclient_id=" << SanitizeLogField(request.client_id)
+            << "\thandler_id=" << SanitizeLogField(handler_id)
+            << "\tstatus_code=" << response.status_code
+            << "\tlatency_ms=" << latency_ms
+            << "\tsql=\"" << SanitizeLogField(request.payload) << "\"\n";
     }
 
     bool EntrypointServer::ParseClusterCommand(

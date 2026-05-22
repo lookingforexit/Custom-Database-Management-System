@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <unordered_set>
+#include <atomic>
 #include <utility>
 
 #include "core/dbms_engine.hpp"
@@ -130,9 +131,13 @@ namespace dbms::server {
         [[nodiscard]] std::optional<network::ResponseEnvelope>
         ForwardToStorageNode(const StorageNodeEndpoint &node,
                              const network::RequestEnvelope &request) const;
-        void WriteAccessLog(const network::RequestEnvelope &request,
-                            const network::ResponseEnvelope &response,
-                            std::int64_t latency_ms) const;
+        void WriteAccessLog(
+            const network::RequestEnvelope &request,
+            const network::ResponseEnvelope &response,
+            const std::string &handler_id,
+            std::chrono::system_clock::time_point started_at_utc,
+            std::chrono::system_clock::time_point finished_at_utc,
+            std::int64_t latency_ms) const;
 
         core::DbmsEngine engine_;
         parser::Parser parser_;
@@ -147,6 +152,7 @@ namespace dbms::server {
             pending_cluster_transactions_;
         std::string access_log_path_;
         mutable std::mutex access_log_mutex_;
+        mutable std::atomic<std::uint64_t> next_handler_id_{1};
     };
 
 } // namespace dbms::server
