@@ -205,7 +205,8 @@ namespace dbms::server {
     } // namespace
 
     EntrypointServer::EntrypointServer(std::string root_path)
-        : engine_(root_path), access_log_path_(root_path + "/access.log") {
+        : engine_(root_path), access_controller_(root_path),
+          access_log_path_(root_path + "/access.log") {
         std::filesystem::create_directories(root_path);
         job_queue_.Start([this](const std::string &sql) -> std::pair<int, std::string> {
             auto parsed = parser_.Parse(sql);
@@ -294,8 +295,10 @@ namespace dbms::server {
             }
             session.user_id = *user_id;
             const auto required_permission = RequiredPermission(statement);
+            const auto authorization_database_name =
+                ResolveAuthorizationDatabaseName(statement, session);
             if (required_permission.has_value() &&
-                !access_controller_.Authorize(*user_id, session.current_database,
+                !access_controller_.Authorize(*user_id, authorization_database_name,
                                               *required_permission)) {
                 return finalize({.status_code = 403,
                                  .payload = "type=AUTHORIZATION_ERROR code=5 message=permission denied sql=\"\""});
@@ -924,8 +927,31 @@ namespace dbms::server {
             return false;
         }
         const auto command = ToUpper(tokens[1]);
+        auto require_admin = [&]() -> bool {
+            if (!access_controller_.HasAccounts()) {
+                response = {.status_code = 403,
+                            .payload = "type=AUTHORIZATION_ERROR code=5 message=admin required sql=\"\""};
+                return false;
+            }
+            const auto user_id =
+                access_controller_.ValidateTokenAndGetUser(request.jwt_token);
+            if (!user_id.has_value()) {
+                response = {.status_code = 401,
+                            .payload = "type=AUTHORIZATION_ERROR code=5 message=invalid or expired jwt token sql=\"\""};
+                return false;
+            }
+            if (!access_controller_.IsAdmin(*user_id)) {
+                response = {.status_code = 403,
+                            .payload = "type=AUTHORIZATION_ERROR code=5 message=admin required sql=\"\""};
+                return false;
+            }
+            return true;
+        };
         if (command == "REGISTER" && tokens.size() >= 4) {
-            const std::string group = tokens.size() >= 5 ? tokens[4] : "admin";
+            const std::string group =
+                tokens.size() >= 5 ? tokens[4] : (access_controller_.HasAccounts()
+                                                      ? "user"
+                                                      : "admin");
             std::string error_message;
             if (!access_controller_.RegisterAccount(tokens[2], tokens[3], group,
                                                     error_message)) {
@@ -948,6 +974,146 @@ namespace dbms::server {
                 return true;
             }
             response = {.status_code = 200, .payload = "token=" + *token};
+            return true;
+        }
+        if (command == "CREATE_GROUP" && tokens.size() >= 3) {
+            if (!require_admin()) {
+                return true;
+            }
+            std::string error_message;
+            if (!access_controller_.CreateGroup(tokens[2], error_message)) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "group created"};
+            return true;
+        }
+        if (command == "ADD_USER_GROUP" && tokens.size() >= 4) {
+            if (!require_admin()) {
+                return true;
+            }
+            std::string error_message;
+            if (!access_controller_.AddUserToGroup(tokens[2], tokens[3],
+                                                   error_message)) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "user added to group"};
+            return true;
+        }
+        if ((command == "GRANT_DEFAULT" || command == "REVOKE_DEFAULT") &&
+            tokens.size() >= 4) {
+            if (!require_admin()) {
+                return true;
+            }
+            const auto permission =
+                catalog::AccessController::ParsePermissionName(tokens[3]);
+            if (!permission.has_value()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=invalid permission sql=\"\""};
+                return true;
+            }
+            std::string error_message;
+            const bool ok = command == "GRANT_DEFAULT"
+                                ? access_controller_.GrantDefault(tokens[2],
+                                                                  *permission,
+                                                                  error_message)
+                                : access_controller_.RevokeDefault(tokens[2],
+                                                                   *permission,
+                                                                   error_message);
+            if (!ok) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "default grant updated"};
+            return true;
+        }
+        if ((command == "GRANT_GROUP" || command == "REVOKE_GROUP") &&
+            tokens.size() >= 5) {
+            if (!require_admin()) {
+                return true;
+            }
+            const auto permission =
+                catalog::AccessController::ParsePermissionName(tokens[4]);
+            if (!permission.has_value()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=invalid permission sql=\"\""};
+                return true;
+            }
+            std::string error_message;
+            const bool ok = command == "GRANT_GROUP"
+                                ? access_controller_.GrantGroup(tokens[2], tokens[3],
+                                                                *permission,
+                                                                error_message)
+                                : access_controller_.RevokeGroup(tokens[2], tokens[3],
+                                                                 *permission,
+                                                                 error_message);
+            if (!ok) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "group grant updated"};
+            return true;
+        }
+        if ((command == "GRANT_USER" || command == "REVOKE_USER") &&
+            tokens.size() >= 5) {
+            if (!require_admin()) {
+                return true;
+            }
+            const auto permission =
+                catalog::AccessController::ParsePermissionName(tokens[4]);
+            if (!permission.has_value()) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=invalid permission sql=\"\""};
+                return true;
+            }
+            std::string error_message;
+            const bool ok = command == "GRANT_USER"
+                                ? access_controller_.GrantUser(tokens[2], tokens[3],
+                                                               *permission,
+                                                               error_message)
+                                : access_controller_.RevokeUser(tokens[2], tokens[3],
+                                                                *permission,
+                                                                error_message);
+            if (!ok) {
+                response = {.status_code = 400,
+                            .payload = "type=VALIDATION_ERROR code=3 message=" +
+                                           error_message + " sql=\"\""};
+                return true;
+            }
+            response = {.status_code = 200, .payload = "user grant updated"};
+            return true;
+        }
+        if (command == "WHOAMI") {
+            if (!access_controller_.HasAccounts()) {
+                response = {.status_code = 200, .payload = "anonymous"};
+                return true;
+            }
+            const auto user_id =
+                access_controller_.ValidateTokenAndGetUser(request.jwt_token);
+            if (!user_id.has_value()) {
+                response = {.status_code = 401,
+                            .payload = "type=AUTHORIZATION_ERROR code=5 message=invalid or expired jwt token sql=\"\""};
+                return true;
+            }
+            const auto groups = access_controller_.UserGroups(*user_id);
+            std::ostringstream payload;
+            payload << "user=" << *user_id << " groups=";
+            for (std::size_t index = 0; index < groups.size(); ++index) {
+                if (index != 0) {
+                    payload << ",";
+                }
+                payload << groups[index];
+            }
+            response = {.status_code = 200, .payload = payload.str()};
             return true;
         }
         response = {.status_code = 400,
@@ -981,6 +1147,59 @@ namespace dbms::server {
             return catalog::Permission::kDropDatabase;
         }
         return std::nullopt;
+    }
+
+    std::string EntrypointServer::ResolveAuthorizationDatabaseName(
+        const parser::Statement &statement,
+        const core::SessionContext &session) const {
+        if (const auto *use =
+                std::get_if<parser::UseDatabaseStatement>(&statement);
+            use != nullptr) {
+            return use->database_name;
+        }
+        if (const auto *create_database =
+                std::get_if<parser::CreateDatabaseStatement>(&statement);
+            create_database != nullptr) {
+            return create_database->database_name;
+        }
+        if (const auto *drop_database =
+                std::get_if<parser::DropDatabaseStatement>(&statement);
+            drop_database != nullptr) {
+            return drop_database->database_name;
+        }
+        if (const auto *create_table =
+                std::get_if<parser::CreateTableStatement>(&statement);
+            create_table != nullptr && create_table->table_name.database_name.has_value()) {
+            return *create_table->table_name.database_name;
+        }
+        if (const auto *drop_table =
+                std::get_if<parser::DropTableStatement>(&statement);
+            drop_table != nullptr && drop_table->table_name.database_name.has_value()) {
+            return *drop_table->table_name.database_name;
+        }
+        if (const auto *insert = std::get_if<parser::InsertStatement>(&statement);
+            insert != nullptr && insert->table_name.database_name.has_value()) {
+            return *insert->table_name.database_name;
+        }
+        if (const auto *update = std::get_if<parser::UpdateStatement>(&statement);
+            update != nullptr && update->table_name.database_name.has_value()) {
+            return *update->table_name.database_name;
+        }
+        if (const auto *delete_statement =
+                std::get_if<parser::DeleteStatement>(&statement);
+            delete_statement != nullptr &&
+            delete_statement->table_name.database_name.has_value()) {
+            return *delete_statement->table_name.database_name;
+        }
+        if (const auto *select = std::get_if<parser::SelectStatement>(&statement);
+            select != nullptr && select->table_name.database_name.has_value()) {
+            return *select->table_name.database_name;
+        }
+        if (const auto *revert = std::get_if<parser::RevertStatement>(&statement);
+            revert != nullptr && revert->table_name.database_name.has_value()) {
+            return *revert->table_name.database_name;
+        }
+        return session.current_database;
     }
 
     std::optional<std::string> EntrypointServer::ResolveClusterDatabaseName(

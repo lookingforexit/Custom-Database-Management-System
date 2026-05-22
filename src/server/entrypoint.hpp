@@ -65,6 +65,9 @@ namespace dbms::server {
                                             network::ResponseEnvelope &response);
         [[nodiscard]] std::optional<catalog::Permission>
         RequiredPermission(const parser::Statement &statement) const;
+        [[nodiscard]] std::string
+        ResolveAuthorizationDatabaseName(const parser::Statement &statement,
+                                         const core::SessionContext &session) const;
         struct ShardRoutingDecision {
             std::size_t node_index{0};
             bool by_shard_key{false};
