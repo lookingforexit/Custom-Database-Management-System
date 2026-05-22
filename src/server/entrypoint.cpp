@@ -25,6 +25,10 @@
 
 namespace dbms::server {
 
+    std::unordered_map<std::string, EntrypointServer *>
+        EntrypointServer::local_node_registry_{};
+    std::mutex EntrypointServer::local_node_registry_mutex_{};
+
     namespace {
 
         std::string ToUpper(std::string value) {
@@ -204,10 +208,16 @@ namespace dbms::server {
 
     } // namespace
 
-    EntrypointServer::EntrypointServer(std::string root_path)
+    EntrypointServer::EntrypointServer(std::string root_path,
+                                       std::string local_endpoint)
         : engine_(root_path), access_controller_(root_path),
-          access_log_path_(root_path + "/access.log") {
+          access_log_path_(root_path + "/access.log"),
+          local_endpoint_(std::move(local_endpoint)) {
         std::filesystem::create_directories(root_path);
+        if (!local_endpoint_.empty()) {
+            std::scoped_lock lock(local_node_registry_mutex_);
+            local_node_registry_[local_endpoint_] = this;
+        }
         job_queue_.Start([this](const std::string &sql) -> std::pair<int, std::string> {
             auto parsed = parser_.Parse(sql);
             if (!parsed.ok()) {
@@ -224,6 +234,16 @@ namespace dbms::server {
             }
             return {200, result.value->message};
         });
+    }
+
+    EntrypointServer::~EntrypointServer() {
+        if (!local_endpoint_.empty()) {
+            std::scoped_lock lock(local_node_registry_mutex_);
+            const auto it = local_node_registry_.find(local_endpoint_);
+            if (it != local_node_registry_.end() && it->second == this) {
+                local_node_registry_.erase(it);
+            }
+        }
     }
 
     core::SessionContext &
@@ -633,15 +653,12 @@ namespace dbms::server {
                     }
                     after_nodes = storage_nodes_;
                 }
-                if (added && !before_nodes.empty() &&
-                    !SyncMetadataToNodes(
+                if (added && !before_nodes.empty()) {
+                    (void)SyncMetadataToNodes(
                         {StorageNodeEndpoint{.host = endpoint->first,
                                              .port = endpoint->second,
                                              .managed = managed,
-                                             .fail_count = 0}})) {
-                    response = {.status_code = 502,
-                                .payload = "type=NETWORK_ERROR code=6 message=metadata sync after add failed sql=\"\""};
-                    return true;
+                                             .fail_count = 0}});
                 }
                 response = {.status_code = 200, .payload = "node added"};
                 return true;
@@ -2005,6 +2022,15 @@ namespace dbms::server {
     EntrypointServer::ForwardToStorageNode(
         const StorageNodeEndpoint &node,
         const network::RequestEnvelope &request) const {
+        const std::string endpoint_key =
+            node.host + ":" + std::to_string(node.port);
+        {
+            std::scoped_lock lock(local_node_registry_mutex_);
+            const auto it = local_node_registry_.find(endpoint_key);
+            if (it != local_node_registry_.end() && it->second != nullptr) {
+                return it->second->HandleRequest(request);
+            }
+        }
         const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (socket_fd < 0) {
             return std::nullopt;

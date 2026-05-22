@@ -25,7 +25,9 @@ namespace dbms::server {
 
     class EntrypointServer {
       public:
-        explicit EntrypointServer(std::string root_path);
+        explicit EntrypointServer(std::string root_path,
+                                  std::string local_endpoint = "");
+        ~EntrypointServer();
 
         [[nodiscard]] network::ResponseEnvelope
         HandleRequest(const network::RequestEnvelope &request);
@@ -162,8 +164,12 @@ namespace dbms::server {
         std::unordered_map<std::string, PendingClusterTransaction>
             pending_cluster_transactions_;
         std::string access_log_path_;
+        std::string local_endpoint_;
         mutable std::mutex access_log_mutex_;
         mutable std::atomic<std::uint64_t> next_handler_id_{1};
+        static std::unordered_map<std::string, EntrypointServer *>
+            local_node_registry_;
+        static std::mutex local_node_registry_mutex_;
     };
 
 } // namespace dbms::server
