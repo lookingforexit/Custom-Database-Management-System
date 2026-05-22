@@ -151,6 +151,10 @@ namespace dbms::core {
 
     RuntimeState &DbmsEngine::runtime_state() { return runtime_state_; }
 
+    const RuntimeState &DbmsEngine::runtime_state() const {
+        return runtime_state_;
+    }
+
     versioning::VersionStore &DbmsEngine::version_store() {
         return version_store_;
     }

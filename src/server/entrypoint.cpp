@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <thread>
 
@@ -101,6 +102,83 @@ namespace dbms::server {
             return value;
         }
 
+        std::string EscapeClusterField(const std::string &value) {
+            std::string escaped;
+            escaped.reserve(value.size());
+            for (char ch : value) {
+                if (ch == '\\' || ch == '\t' || ch == '\n') {
+                    escaped.push_back('\\');
+                }
+                escaped.push_back(ch);
+            }
+            return escaped;
+        }
+
+        std::string UnescapeClusterField(const std::string &value) {
+            std::string unescaped;
+            unescaped.reserve(value.size());
+            bool escaped = false;
+            for (char ch : value) {
+                if (escaped) {
+                    unescaped.push_back(ch);
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else {
+                    unescaped.push_back(ch);
+                }
+            }
+            return unescaped;
+        }
+
+        std::vector<std::string> SplitByTab(const std::string &line) {
+            std::vector<std::string> parts;
+            std::string current;
+            bool escaped = false;
+            for (char ch : line) {
+                if (escaped) {
+                    current.push_back(ch);
+                    escaped = false;
+                    continue;
+                }
+                if (ch == '\\') {
+                    escaped = true;
+                    current.push_back(ch);
+                    continue;
+                }
+                if (ch == '\t') {
+                    parts.push_back(current);
+                    current.clear();
+                    continue;
+                }
+                current.push_back(ch);
+            }
+            parts.push_back(current);
+            return parts;
+        }
+
+        std::optional<common::Value> DecodeClusterValue(const std::string &encoded) {
+            if (encoded == "Null") {
+                return std::monostate{};
+            }
+            if (encoded.rfind("Int:", 0) == 0) {
+                try {
+                    std::size_t consumed = 0;
+                    const auto parsed = std::stoll(encoded.substr(4), &consumed);
+                    if (consumed != encoded.size() - 4) {
+                        return std::nullopt;
+                    }
+                    return static_cast<std::int64_t>(parsed);
+                } catch (...) {
+                    return std::nullopt;
+                }
+            }
+            if (encoded.rfind("String:", 0) == 0) {
+                return UnescapeClusterField(encoded.substr(7));
+            }
+            return std::nullopt;
+        }
+
     } // namespace
 
     EntrypointServer::EntrypointServer(std::string root_path)
@@ -151,7 +229,7 @@ namespace dbms::server {
         };
 
         network::ResponseEnvelope cluster_response;
-        if (ParseClusterCommand(request.payload, cluster_response)) {
+        if (ParseClusterCommand(request, cluster_response)) {
             return finalize(cluster_response);
         }
         network::ResponseEnvelope async_response;
@@ -201,16 +279,74 @@ namespace dbms::server {
         }
 
         if (!nodes_snapshot.empty()) {
-            if (IsMutatingStatement(statement)) {
-                auto tx_result = ExecuteTwoPhaseCommit(nodes_snapshot, request);
+            if (IsMetadataStatement(statement)) {
+                auto local_result = engine_.ExecuteSql(session, request.payload);
+                if (!local_result.ok()) {
+                    return finalize({
+                        .status_code = 400,
+                        .payload =
+                            common::FormatErrorContract(*local_result.error,
+                                                        request.payload),
+                    });
+                }
+                if (ShouldBroadcast(statement)) {
+                    if (IsMutatingStatement(statement)) {
+                        auto tx_result =
+                            ExecuteTwoPhaseCommit(nodes_snapshot, request);
+                        if (!tx_result.has_value()) {
+                            return finalize({.status_code = 502,
+                                             .payload = "type=NETWORK_ERROR code=6 message=cluster metadata broadcast failed sql=\"\""});
+                        }
+                    } else {
+                        std::string merged_unused;
+                        auto broadcast_result =
+                            BroadcastToStorageNodes(nodes_snapshot, request, false,
+                                                    merged_unused);
+                        if (!broadcast_result.has_value()) {
+                            return finalize({.status_code = 502,
+                                             .payload = "type=NETWORK_ERROR code=6 message=cluster metadata broadcast failed sql=\"\""});
+                        }
+                    }
+                }
+                if (IsSelectStatement(statement)) {
+                    return finalize({.status_code = 200,
+                                     .payload =
+                                         QueryResultToJson(*local_result.value)});
+                }
+                return finalize(
+                    {.status_code = 200, .payload = local_result.value->message});
+            }
+
+            if (const auto *insert =
+                    std::get_if<parser::InsertStatement>(&statement);
+                insert != nullptr) {
+                const auto routed_sql =
+                    SplitInsertByShard(*insert, nodes_snapshot, session);
+                if (!routed_sql.has_value()) {
+                    return finalize({.status_code = 502,
+                                     .payload = "type=NETWORK_ERROR code=6 message=unable to shard insert sql=\"\""});
+                }
+                std::vector<std::pair<StorageNodeEndpoint, std::string>> prepared;
+                for (const auto &[node_index, sql] : *routed_sql) {
+                    prepared.push_back({nodes_snapshot[node_index], sql});
+                }
+                auto tx_result = ExecuteTwoPhaseCommit(prepared, request);
                 if (!tx_result.has_value()) {
                     return finalize({.status_code = 502,
-                                     .payload = "type=NETWORK_ERROR code=6 message=cluster 2pc failed sql=\"\""});
+                                     .payload = "type=NETWORK_ERROR code=6 message=cluster sharded insert failed sql=\"\""});
                 }
                 return finalize(*tx_result);
             }
 
             if (ShouldBroadcast(statement)) {
+                if (IsMutatingStatement(statement)) {
+                    auto tx_result = ExecuteTwoPhaseCommit(nodes_snapshot, request);
+                    if (!tx_result.has_value()) {
+                        return finalize({.status_code = 502,
+                                         .payload = "type=NETWORK_ERROR code=6 message=cluster 2pc failed sql=\"\""});
+                    }
+                    return finalize(*tx_result);
+                }
                 std::string merged_unused;
                 auto broadcast_result =
                     BroadcastToStorageNodes(nodes_snapshot, request, false,
@@ -223,7 +359,7 @@ namespace dbms::server {
             }
 
             if (IsSelectStatement(statement) &&
-                !RouteNodeIndex(statement, nodes_snapshot).has_value()) {
+                !RouteNodeIndex(statement, nodes_snapshot, session).has_value()) {
                 std::string merged_json;
                 auto fanout =
                     BroadcastToStorageNodes(nodes_snapshot, request, true, merged_json);
@@ -234,7 +370,8 @@ namespace dbms::server {
                 return finalize({.status_code = 200, .payload = merged_json});
             }
 
-            const auto node_index = RouteNodeIndex(statement, nodes_snapshot);
+            const auto node_index =
+                RouteNodeIndex(statement, nodes_snapshot, session);
             if (!node_index.has_value()) {
                 return finalize({.status_code = 502,
                                  .payload = "type=NETWORK_ERROR code=6 message=unable to route request sql=\"\""});
@@ -291,7 +428,8 @@ namespace dbms::server {
     }
 
     bool EntrypointServer::ParseClusterCommand(
-        const std::string &payload, network::ResponseEnvelope &response) {
+        const network::RequestEnvelope &request, network::ResponseEnvelope &response) {
+        const std::string &payload = request.payload;
         const std::string prepare_prefix = "CLUSTER PREPARE_TX ";
         if (payload.rfind(prepare_prefix, 0) == 0) {
             const auto rest = payload.substr(prepare_prefix.size());
@@ -319,9 +457,14 @@ namespace dbms::server {
                             .payload = "type=VALIDATION_ERROR code=3 message=PREPARE_TX requires mutating sql sql=\"\""};
                 return true;
             }
+            auto &cluster_session = GetOrCreateSession(request.client_id);
             std::lock_guard<std::mutex> lock(pending_transactions_mutex_);
             pending_cluster_transactions_[tx_id] =
-                PendingClusterTransaction{.sql = sql, .client_id = "__cluster_tx__"};
+                PendingClusterTransaction{
+                    .sql = sql,
+                    .client_id = request.client_id,
+                    .current_database = cluster_session.current_database,
+                };
             response = {.status_code = 200, .payload = "prepared"};
             return true;
         }
@@ -346,6 +489,7 @@ namespace dbms::server {
                 pending_cluster_transactions_.erase(it);
             }
             auto &session = GetOrCreateSession(pending.client_id);
+            session.current_database = pending.current_database;
             auto result = engine_.ExecuteSql(session, pending.sql);
             if (!result.ok()) {
                 response = {.status_code = 400,
@@ -380,6 +524,43 @@ namespace dbms::server {
             response = {.status_code = 200, .payload = "pong"};
             return true;
         }
+        if (command == "DUMP_TABLE" && tokens.size() >= 4) {
+            core::SessionContext dump_session;
+            dump_session.client_id = "__cluster_dump__";
+            auto use_result = engine_.ExecuteSql(
+                dump_session, "USE " + tokens[2] + ";");
+            if (!use_result.ok()) {
+                response = {.status_code = 400,
+                            .payload = common::FormatErrorContract(*use_result.error,
+                                                                   tokens[2])};
+                return true;
+            }
+            auto select_result =
+                engine_.ExecuteSql(dump_session, "SELECT * FROM " + tokens[3] + ";");
+            if (!select_result.ok()) {
+                response = {.status_code = 400,
+                            .payload = common::FormatErrorContract(
+                                *select_result.error, tokens[3])};
+                return true;
+            }
+            std::ostringstream output;
+            output << "ROWS";
+            for (const auto &row : select_result.value->rows) {
+                output << "\nROW";
+                for (const auto &value : row.values) {
+                    if (std::holds_alternative<std::monostate>(value)) {
+                        output << "\tNull";
+                    } else if (std::holds_alternative<std::int64_t>(value)) {
+                        output << "\tInt:" << std::get<std::int64_t>(value);
+                    } else {
+                        output << "\tString:"
+                               << EscapeClusterField(common::AsString(value));
+                    }
+                }
+            }
+            response = {.status_code = 200, .payload = output.str()};
+            return true;
+        }
         if (command == "LIST_NODES") {
             std::ostringstream output;
             std::lock_guard<std::mutex> lock(nodes_mutex_);
@@ -403,31 +584,72 @@ namespace dbms::server {
             }
             if (command == "ADD_NODE") {
                 const bool managed = tokens.size() >= 4 && ToUpper(tokens[3]) == "MANAGED";
-                std::lock_guard<std::mutex> lock(nodes_mutex_);
-                const auto exists = std::any_of(
-                    storage_nodes_.begin(), storage_nodes_.end(),
-                    [&](const StorageNodeEndpoint &node) {
-                        return node.host == endpoint->first &&
-                               node.port == endpoint->second;
-                    });
-                if (!exists) {
-                    storage_nodes_.push_back(
-                        {.host = endpoint->first,
-                         .port = endpoint->second,
-                         .managed = managed,
-                         .fail_count = 0});
+                std::vector<StorageNodeEndpoint> before_nodes;
+                std::vector<StorageNodeEndpoint> after_nodes;
+                bool added = false;
+                {
+                    std::lock_guard<std::mutex> lock(nodes_mutex_);
+                    before_nodes = storage_nodes_;
+                    const auto exists = std::any_of(
+                        storage_nodes_.begin(), storage_nodes_.end(),
+                        [&](const StorageNodeEndpoint &node) {
+                            return node.host == endpoint->first &&
+                                   node.port == endpoint->second;
+                        });
+                    if (!exists) {
+                        storage_nodes_.push_back(
+                            {.host = endpoint->first,
+                             .port = endpoint->second,
+                             .managed = managed,
+                             .fail_count = 0});
+                        added = true;
+                    }
+                    after_nodes = storage_nodes_;
+                }
+                if (added && !before_nodes.empty() &&
+                    !SyncMetadataToNodes(
+                        {StorageNodeEndpoint{.host = endpoint->first,
+                                             .port = endpoint->second,
+                                             .managed = managed,
+                                             .fail_count = 0}})) {
+                    response = {.status_code = 502,
+                                .payload = "type=NETWORK_ERROR code=6 message=metadata sync after add failed sql=\"\""};
+                    return true;
                 }
                 response = {.status_code = 200, .payload = "node added"};
                 return true;
             }
-            std::lock_guard<std::mutex> lock(nodes_mutex_);
-            storage_nodes_.erase(
-                std::remove_if(storage_nodes_.begin(), storage_nodes_.end(),
-                               [&](const StorageNodeEndpoint &node) {
-                                   return node.host == endpoint->first &&
-                                          node.port == endpoint->second;
-                               }),
-                storage_nodes_.end());
+            std::vector<StorageNodeEndpoint> before_nodes;
+            std::vector<StorageNodeEndpoint> after_nodes;
+            bool removed = false;
+            {
+                std::lock_guard<std::mutex> lock(nodes_mutex_);
+                before_nodes = storage_nodes_;
+                auto it = std::find_if(storage_nodes_.begin(), storage_nodes_.end(),
+                                       [&](const StorageNodeEndpoint &node) {
+                                           return node.host == endpoint->first &&
+                                                  node.port == endpoint->second;
+                                       });
+                if (it != storage_nodes_.end()) {
+                    storage_nodes_.erase(it);
+                    removed = true;
+                }
+                after_nodes = storage_nodes_;
+            }
+            if (removed && !after_nodes.empty()) {
+                std::vector<StorageNodeEndpoint> removed_source;
+                for (const auto &node : before_nodes) {
+                    if (node.host == endpoint->first &&
+                        node.port == endpoint->second) {
+                        removed_source.push_back(node);
+                    }
+                }
+                if (!RebalanceClusterData(removed_source, after_nodes, false)) {
+                    response = {.status_code = 502,
+                                .payload = "type=NETWORK_ERROR code=6 message=rebalance after remove failed sql=\"\""};
+                    return true;
+                }
+            }
             response = {.status_code = 200, .payload = "node removed"};
             return true;
         }
@@ -584,38 +806,160 @@ namespace dbms::server {
         return std::nullopt;
     }
 
+    std::optional<std::string> EntrypointServer::ResolveClusterDatabaseName(
+        const parser::QualifiedName &table_name,
+        const core::SessionContext &session) const {
+        if (table_name.database_name.has_value()) {
+            return table_name.database_name;
+        }
+        if (!session.current_database.empty()) {
+            return session.current_database;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<catalog::TableSchema> EntrypointServer::ResolveClusterTableSchema(
+        const parser::QualifiedName &table_name,
+        const core::SessionContext &session) const {
+        const auto database_name =
+            ResolveClusterDatabaseName(table_name, session);
+        if (!database_name.has_value()) {
+            return std::nullopt;
+        }
+        const auto &databases = engine_.runtime_state().databases;
+        const auto database_it = databases.find(*database_name);
+        if (database_it == databases.end()) {
+            return std::nullopt;
+        }
+        const auto table_it =
+            database_it->second.tables.find(table_name.object_name);
+        if (table_it == database_it->second.tables.end()) {
+            return std::nullopt;
+        }
+        return table_it->second.schema;
+    }
+
+    std::optional<std::string>
+    EntrypointServer::ResolveShardKeyColumn(const catalog::TableSchema &schema) const {
+        for (const auto &column : schema.columns) {
+            if (column.constraint == catalog::ColumnConstraint::kIndexed &&
+                column.type == common::ValueType::kInt64) {
+                return column.name;
+            }
+        }
+        for (const auto &column : schema.columns) {
+            if (column.constraint == catalog::ColumnConstraint::kIndexed) {
+                return column.name;
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<common::Value> EntrypointServer::TryExtractShardKeyValue(
+        const parser::Expression &expr, const std::string &shard_key_column) const {
+        if (const auto *logical = std::get_if<parser::LogicalExpression>(&expr.node);
+            logical != nullptr) {
+            if (logical->op == parser::LogicalOperator::kOr) {
+                return std::nullopt;
+            }
+            auto left = TryExtractShardKeyValue(*logical->left, shard_key_column);
+            if (left.has_value()) {
+                return left;
+            }
+            return TryExtractShardKeyValue(*logical->right, shard_key_column);
+        }
+        const auto *comparison =
+            std::get_if<parser::BinaryComparisonExpression>(&expr.node);
+        if (comparison == nullptr ||
+            comparison->op != parser::ComparisonOperator::kEqual) {
+            return std::nullopt;
+        }
+
+        auto extract = [&](const parser::Expression &column_expr,
+                           const parser::Expression &value_expr)
+            -> std::optional<common::Value> {
+            const auto *column =
+                std::get_if<parser::ColumnReferenceExpression>(&column_expr.node);
+            const auto *literal =
+                std::get_if<parser::LiteralExpression>(&value_expr.node);
+            if (column == nullptr || literal == nullptr) {
+                return std::nullopt;
+            }
+            if (column->column_name != shard_key_column) {
+                return std::nullopt;
+            }
+            return literal->value;
+        };
+
+        if (auto value = extract(*comparison->left, *comparison->right);
+            value.has_value()) {
+            return value;
+        }
+        return extract(*comparison->right, *comparison->left);
+    }
+
+    EntrypointServer::ShardRoutingDecision EntrypointServer::RouteValueToNode(
+        const common::Value &value,
+        const std::vector<StorageNodeEndpoint> &nodes) const {
+        if (nodes.empty()) {
+            return {};
+        }
+        const auto hash_value = common::GetValueType(value) == common::ValueType::kInt64
+                                    ? std::hash<std::int64_t>{}(
+                                          std::get<std::int64_t>(value))
+                                    : std::hash<std::string>{}(
+                                          common::AsString(value));
+        return {.node_index = hash_value % nodes.size(), .by_shard_key = true};
+    }
+
     std::optional<std::size_t>
     EntrypointServer::RouteNodeIndex(
         const parser::Statement &statement,
-        const std::vector<StorageNodeEndpoint> &nodes) const {
+        const std::vector<StorageNodeEndpoint> &nodes,
+        const core::SessionContext &session) const {
         if (nodes.empty()) {
             return std::nullopt;
         }
-        if (const auto *select = std::get_if<parser::SelectStatement>(&statement);
-            select != nullptr) {
-            if (!select->where.has_value()) {
+        auto evaluate_route = [&](const parser::QualifiedName &table_name,
+                                  const std::optional<parser::Expression> &where)
+            -> std::optional<std::size_t> {
+            if (!where.has_value()) {
                 return std::nullopt;
             }
+            const auto schema = ResolveClusterTableSchema(table_name, session);
+            if (!schema.has_value()) {
+                return std::nullopt;
+            }
+            const auto shard_key = ResolveShardKeyColumn(*schema);
+            if (!shard_key.has_value()) {
+                return std::nullopt;
+            }
+            const auto shard_value =
+                TryExtractShardKeyValue(*where, *shard_key);
+            if (!shard_value.has_value()) {
+                return std::nullopt;
+            }
+            return RouteValueToNode(*shard_value, nodes).node_index;
+        };
+        if (const auto *select = std::get_if<parser::SelectStatement>(&statement);
+            select != nullptr) {
+            return evaluate_route(select->table_name, select->where);
         }
         if (const auto *update = std::get_if<parser::UpdateStatement>(&statement);
             update != nullptr) {
-            if (!update->where.has_value()) {
-                return std::nullopt;
-            }
+            return evaluate_route(update->table_name, update->where);
         }
         if (const auto *delete_statement =
                 std::get_if<parser::DeleteStatement>(&statement);
             delete_statement != nullptr) {
-            if (!delete_statement->where.has_value()) {
-                return std::nullopt;
-            }
+            return evaluate_route(delete_statement->table_name,
+                                  delete_statement->where);
         }
-        const auto table_name = ExtractTargetTableName(statement);
-        if (!table_name.has_value()) {
+        if (const auto *revert = std::get_if<parser::RevertStatement>(&statement);
+            revert != nullptr) {
             return std::nullopt;
         }
-        const std::size_t hash_value = std::hash<std::string>{}(*table_name);
-        return hash_value % nodes.size();
+        return std::nullopt;
     }
 
     std::optional<std::string>
@@ -678,6 +1022,15 @@ namespace dbms::server {
         return false;
     }
 
+    bool EntrypointServer::IsMetadataStatement(
+        const parser::Statement &statement) const {
+        return std::holds_alternative<parser::CreateDatabaseStatement>(statement) ||
+               std::holds_alternative<parser::DropDatabaseStatement>(statement) ||
+               std::holds_alternative<parser::UseDatabaseStatement>(statement) ||
+               std::holds_alternative<parser::CreateTableStatement>(statement) ||
+               std::holds_alternative<parser::DropTableStatement>(statement);
+    }
+
     bool EntrypointServer::IsSelectStatement(const parser::Statement &statement) const {
         return std::holds_alternative<parser::SelectStatement>(statement);
     }
@@ -686,6 +1039,144 @@ namespace dbms::server {
         return !std::holds_alternative<parser::SelectStatement>(statement) &&
                !std::holds_alternative<parser::UseDatabaseStatement>(statement) &&
                !std::holds_alternative<parser::UnknownStatement>(statement);
+    }
+
+    std::string
+    EntrypointServer::RenderLiteralSql(const common::Value &value) const {
+        if (std::holds_alternative<std::monostate>(value)) {
+            return "NULL";
+        }
+        if (std::holds_alternative<std::int64_t>(value)) {
+            return std::to_string(std::get<std::int64_t>(value));
+        }
+        std::string escaped = common::AsString(value);
+        std::string quoted;
+        quoted.reserve(escaped.size() + 2);
+        quoted.push_back('"');
+        for (char ch : escaped) {
+            if (ch == '\\' || ch == '"') {
+                quoted.push_back('\\');
+            }
+            quoted.push_back(ch);
+        }
+        quoted.push_back('"');
+        return quoted;
+    }
+
+    std::string EntrypointServer::RenderInsertSql(
+        const parser::QualifiedName &table_name,
+        const std::vector<std::string> &column_names,
+        const std::vector<std::vector<common::Value>> &rows) const {
+        std::ostringstream sql;
+        sql << "INSERT INTO ";
+        if (table_name.database_name.has_value()) {
+            sql << *table_name.database_name << ".";
+        }
+        sql << table_name.object_name << " (";
+        for (std::size_t index = 0; index < column_names.size(); ++index) {
+            if (index != 0) {
+                sql << ", ";
+            }
+            sql << column_names[index];
+        }
+        sql << ") VALUES ";
+        for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+            if (row_index != 0) {
+                sql << ", ";
+            }
+            sql << "(";
+            for (std::size_t column_index = 0; column_index < rows[row_index].size();
+                 ++column_index) {
+                if (column_index != 0) {
+                    sql << ", ";
+                }
+                sql << RenderLiteralSql(rows[row_index][column_index]);
+            }
+            sql << ")";
+        }
+        sql << ";";
+        return sql.str();
+    }
+
+    std::string
+    EntrypointServer::RenderCreateTableSql(const catalog::TableSchema &schema) const {
+        std::ostringstream sql;
+        sql << "CREATE TABLE " << schema.table_name << " (";
+        for (std::size_t index = 0; index < schema.columns.size(); ++index) {
+            if (index != 0) {
+                sql << ", ";
+            }
+            const auto &column = schema.columns[index];
+            sql << column.name << " "
+                << (column.type == common::ValueType::kInt64 ? "INT" : "STRING");
+            if (column.constraint == catalog::ColumnConstraint::kNotNull) {
+                sql << " NOT NULL";
+            }
+            if (column.constraint == catalog::ColumnConstraint::kIndexed) {
+                sql << " INDEXED";
+            }
+            if (column.default_value.has_value()) {
+                sql << " DEFAULT " << RenderLiteralSql(*column.default_value);
+            }
+        }
+        sql << ");";
+        return sql.str();
+    }
+
+    std::optional<std::unordered_map<std::size_t, std::string>>
+    EntrypointServer::SplitInsertByShard(
+        const parser::InsertStatement &insert,
+        const std::vector<StorageNodeEndpoint> &nodes,
+        const core::SessionContext &session) const {
+        const auto schema = ResolveClusterTableSchema(insert.table_name, session);
+        if (!schema.has_value()) {
+            return std::nullopt;
+        }
+        const auto shard_key = ResolveShardKeyColumn(*schema);
+        if (!shard_key.has_value()) {
+            return std::nullopt;
+        }
+        auto shard_column_it =
+            std::find(insert.column_names.begin(), insert.column_names.end(),
+                      *shard_key);
+        if (shard_column_it == insert.column_names.end()) {
+            return std::nullopt;
+        }
+        const auto shard_column_index = static_cast<std::size_t>(
+            std::distance(insert.column_names.begin(), shard_column_it));
+        std::unordered_map<std::size_t, std::vector<std::vector<common::Value>>>
+            rows_by_node;
+        parser::QualifiedName qualified_table_name = insert.table_name;
+        qualified_table_name.database_name =
+            ResolveClusterDatabaseName(insert.table_name, session);
+        if (!qualified_table_name.database_name.has_value()) {
+            return std::nullopt;
+        }
+        for (const auto &row_exprs : insert.rows) {
+            if (shard_column_index >= row_exprs.size()) {
+                return std::nullopt;
+            }
+            std::vector<common::Value> row_values;
+            row_values.reserve(row_exprs.size());
+            for (const auto &expr : row_exprs) {
+                const auto *literal =
+                    std::get_if<parser::LiteralExpression>(&expr.node);
+                if (literal == nullptr) {
+                    return std::nullopt;
+                }
+                row_values.push_back(literal->value);
+            }
+            const auto route =
+                RouteValueToNode(row_values[shard_column_index], nodes);
+            rows_by_node[route.node_index].push_back(std::move(row_values));
+        }
+        std::unordered_map<std::size_t, std::string> sql_by_node;
+        for (auto &[node_index, rows] : rows_by_node) {
+            sql_by_node.emplace(
+                node_index,
+                RenderInsertSql(qualified_table_name, insert.column_names, rows));
+        }
+        return sql_by_node;
     }
 
     std::string
@@ -722,6 +1213,211 @@ namespace dbms::server {
         }
         output << "]";
         return output.str();
+    }
+
+    std::optional<std::vector<EntrypointServer::DumpedTableRow>>
+    EntrypointServer::FetchTableDump(const StorageNodeEndpoint &node,
+                                     const std::string &database_name,
+                                     const std::string &table_name) const {
+        const network::RequestEnvelope request{
+            .client_id = "__cluster_rebalance__",
+            .jwt_token = "",
+            .payload = "CLUSTER DUMP_TABLE " + database_name + " " + table_name,
+        };
+        auto response = ForwardToStorageNode(node, request);
+        if (!response.has_value() || response->status_code != 200) {
+            return std::nullopt;
+        }
+        std::vector<DumpedTableRow> rows;
+        std::istringstream input(response->payload);
+        std::string line;
+        bool first_line = true;
+        while (std::getline(input, line)) {
+            if (first_line) {
+                first_line = false;
+                if (line != "ROWS") {
+                    return std::nullopt;
+                }
+                continue;
+            }
+            if (line.empty()) {
+                continue;
+            }
+            const auto parts = SplitByTab(line);
+            if (parts.empty() || parts[0] != "ROW") {
+                return std::nullopt;
+            }
+            DumpedTableRow row;
+            for (std::size_t index = 1; index < parts.size(); ++index) {
+                auto value = DecodeClusterValue(parts[index]);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                row.values.push_back(*value);
+            }
+            rows.push_back(std::move(row));
+        }
+        return rows;
+    }
+
+    bool EntrypointServer::SyncMetadataToNodes(
+        const std::vector<StorageNodeEndpoint> &target_nodes) const {
+        for (const auto &[database_name, database_runtime] :
+             engine_.runtime_state().databases) {
+            for (const auto &node : target_nodes) {
+                network::RequestEnvelope create_db_request{
+                    .client_id = "__cluster_rebalance__",
+                    .jwt_token = "",
+                    .payload = "CREATE DATABASE " + database_name + ";",
+                };
+                auto create_db_response =
+                    ForwardToStorageNode(node, create_db_request);
+                if (!create_db_response.has_value() ||
+                    (create_db_response->status_code != 200 &&
+                     create_db_response->payload.find("already exists") ==
+                         std::string::npos)) {
+                    return false;
+                }
+                network::RequestEnvelope use_request{
+                    .client_id = "__cluster_rebalance__",
+                    .jwt_token = "",
+                    .payload = "USE " + database_name + ";",
+                };
+                auto use_response = ForwardToStorageNode(node, use_request);
+                if (!use_response.has_value() || use_response->status_code != 200) {
+                    return false;
+                }
+                for (const auto &[table_name, table_runtime] :
+                     database_runtime.tables) {
+                    (void)table_name;
+                    network::RequestEnvelope create_table_request = use_request;
+                    create_table_request.payload =
+                        RenderCreateTableSql(table_runtime.schema);
+                    auto create_table_response =
+                        ForwardToStorageNode(node, create_table_request);
+                    if (!create_table_response.has_value() ||
+                        (create_table_response->status_code != 200 &&
+                         create_table_response->payload.find("already exists") ==
+                             std::string::npos)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool EntrypointServer::RebalanceClusterData(
+        const std::vector<StorageNodeEndpoint> &source_nodes,
+        const std::vector<StorageNodeEndpoint> &target_nodes,
+        bool truncate_targets) const {
+        if (source_nodes.empty() || target_nodes.empty()) {
+            return true;
+        }
+        if (!SyncMetadataToNodes(target_nodes)) {
+            return false;
+        }
+        for (const auto &[database_name, database_runtime] :
+             engine_.runtime_state().databases) {
+            for (const auto &[table_name, table_runtime] : database_runtime.tables) {
+                const auto shard_key = ResolveShardKeyColumn(table_runtime.schema);
+                if (!shard_key.has_value()) {
+                    continue;
+                }
+                auto shard_it = std::find_if(
+                    table_runtime.schema.columns.begin(),
+                    table_runtime.schema.columns.end(),
+                    [&](const catalog::ColumnDefinition &column) {
+                        return column.name == *shard_key;
+                    });
+                if (shard_it == table_runtime.schema.columns.end()) {
+                    continue;
+                }
+                const auto shard_column_index = static_cast<std::size_t>(
+                    std::distance(table_runtime.schema.columns.begin(), shard_it));
+
+                std::vector<DumpedTableRow> all_rows;
+                std::unordered_set<std::string> seen_rows;
+                for (const auto &node : source_nodes) {
+                    auto dumped_rows =
+                        FetchTableDump(node, database_name, table_name);
+                    if (!dumped_rows.has_value()) {
+                        return false;
+                    }
+                    for (const auto &row : *dumped_rows) {
+                        std::ostringstream fingerprint;
+                        for (const auto &value : row.values) {
+                            fingerprint << RenderLiteralSql(value) << "|";
+                        }
+                        if (seen_rows.insert(fingerprint.str()).second) {
+                            all_rows.push_back(row);
+                        }
+                    }
+                }
+
+                if (truncate_targets) {
+                    network::RequestEnvelope truncate_request{
+                        .client_id = "__cluster_rebalance__",
+                        .jwt_token = "",
+                        .payload = "USE " + database_name + ";",
+                    };
+                    for (const auto &node : target_nodes) {
+                        auto use_response =
+                            ForwardToStorageNode(node, truncate_request);
+                        if (!use_response.has_value() ||
+                            use_response->status_code != 200) {
+                            return false;
+                        }
+                        network::RequestEnvelope delete_request = truncate_request;
+                        delete_request.payload = "DELETE FROM " + table_name + ";";
+                        auto delete_response =
+                            ForwardToStorageNode(node, delete_request);
+                        if (!delete_response.has_value() ||
+                            delete_response->status_code != 200) {
+                            return false;
+                        }
+                    }
+                }
+
+                std::unordered_map<std::size_t, std::vector<std::vector<common::Value>>>
+                    rows_by_node;
+                for (const auto &row : all_rows) {
+                    if (shard_column_index >= row.values.size()) {
+                        return false;
+                    }
+                    const auto route =
+                        RouteValueToNode(row.values[shard_column_index], target_nodes);
+                    rows_by_node[route.node_index].push_back(row.values);
+                }
+                std::vector<std::pair<StorageNodeEndpoint, std::string>> prepared;
+                parser::InsertStatement insert;
+                insert.table_name = parser::QualifiedName{
+                    .database_name = database_name,
+                    .object_name = table_name,
+                };
+                for (const auto &column : table_runtime.schema.columns) {
+                    insert.column_names.push_back(column.name);
+                }
+                for (auto &[node_index, rows] : rows_by_node) {
+                    prepared.push_back(
+                        {target_nodes[node_index],
+                         RenderInsertSql(insert.table_name, insert.column_names,
+                                         rows)});
+                }
+                if (!prepared.empty()) {
+                    network::RequestEnvelope request{
+                        .client_id = "__cluster_rebalance__",
+                        .jwt_token = "",
+                        .payload = "REBALANCE " + database_name + "." + table_name,
+                    };
+                    auto tx_result = ExecuteTwoPhaseCommit(prepared, request);
+                    if (!tx_result.has_value() || tx_result->status_code != 200) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     std::optional<network::ResponseEnvelope>
@@ -780,29 +1476,59 @@ namespace dbms::server {
     }
 
     std::optional<network::ResponseEnvelope>
+    EntrypointServer::ExecutePreparedRequests(
+        const std::vector<std::pair<StorageNodeEndpoint, std::string>> &prepared,
+        const network::RequestEnvelope &request) const {
+        for (const auto &[node, sql] : prepared) {
+            network::RequestEnvelope forwarded = request;
+            forwarded.payload = sql;
+            auto response = ForwardToStorageNode(node, forwarded);
+            if (!response.has_value() || response->status_code != 200) {
+                return std::nullopt;
+            }
+        }
+        return network::ResponseEnvelope{.status_code = 200,
+                                         .payload = "sharded request applied"};
+    }
+
+    std::optional<network::ResponseEnvelope>
     EntrypointServer::ExecuteTwoPhaseCommit(
         const std::vector<StorageNodeEndpoint> &nodes,
         const network::RequestEnvelope &request) const {
+        std::vector<std::pair<StorageNodeEndpoint, std::string>> prepared;
+        prepared.reserve(nodes.size());
+        for (const auto &node : nodes) {
+            prepared.push_back({node, request.payload});
+        }
+        return ExecuteTwoPhaseCommit(prepared, request);
+    }
+
+    std::optional<network::ResponseEnvelope>
+    EntrypointServer::ExecuteTwoPhaseCommit(
+        const std::vector<std::pair<StorageNodeEndpoint, std::string>> &prepared,
+        const network::RequestEnvelope &request) const {
         const std::string tx_id = common::UuidGenerator::NewGuidV4();
 
-        std::vector<StorageNodeEndpoint> prepared_nodes;
-        for (const auto &node : nodes) {
+        std::vector<std::pair<StorageNodeEndpoint, std::string>> prepared_nodes;
+        for (const auto &[node, sql] : prepared) {
             network::RequestEnvelope prepare_request = request;
             prepare_request.payload =
-                "CLUSTER PREPARE_TX " + tx_id + " " + request.payload;
+                "CLUSTER PREPARE_TX " + tx_id + " " + sql;
             auto prepare_response = ForwardToStorageNode(node, prepare_request);
             if (!prepare_response.has_value() || prepare_response->status_code != 200) {
-                for (const auto &prepared : prepared_nodes) {
+                for (const auto &[prepared_node, prepared_sql] : prepared_nodes) {
+                    (void)prepared_sql;
                     network::RequestEnvelope abort_request = request;
                     abort_request.payload = "CLUSTER ABORT_TX " + tx_id;
-                    (void)ForwardToStorageNode(prepared, abort_request);
+                    (void)ForwardToStorageNode(prepared_node, abort_request);
                 }
                 return std::nullopt;
             }
-            prepared_nodes.push_back(node);
+            prepared_nodes.push_back({node, sql});
         }
 
-        for (const auto &node : prepared_nodes) {
+        for (const auto &[node, sql] : prepared_nodes) {
+            (void)sql;
             network::RequestEnvelope commit_request = request;
             commit_request.payload = "CLUSTER COMMIT_TX " + tx_id;
             auto commit_response = ForwardToStorageNode(node, commit_request);

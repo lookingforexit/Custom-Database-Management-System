@@ -9,9 +9,12 @@
 #include <unordered_map>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
 
 #include "core/dbms_engine.hpp"
 #include "catalog/rbac.hpp"
+#include "catalog/schema.hpp"
+#include "common/types.hpp"
 #include "network/protocol.hpp"
 #include "parser/parser.hpp"
 #include "runtime/job_queue.hpp"
@@ -37,12 +40,13 @@ namespace dbms::server {
         struct PendingClusterTransaction {
             std::string sql;
             std::string client_id;
+            std::string current_database;
         };
 
         bool RestartManagedNode(StorageNodeEndpoint &node) const;
 
         core::SessionContext &GetOrCreateSession(const std::string &client_id);
-        [[nodiscard]] bool ParseClusterCommand(const std::string &payload,
+        [[nodiscard]] bool ParseClusterCommand(const network::RequestEnvelope &request,
                                                network::ResponseEnvelope &response);
         [[nodiscard]] bool ParseAsyncCommand(const network::RequestEnvelope &request,
                                              network::ResponseEnvelope &response);
@@ -52,19 +56,72 @@ namespace dbms::server {
                                             network::ResponseEnvelope &response);
         [[nodiscard]] std::optional<catalog::Permission>
         RequiredPermission(const parser::Statement &statement) const;
+        struct ShardRoutingDecision {
+            std::size_t node_index{0};
+            bool by_shard_key{false};
+        };
+        struct DumpedTableRow {
+            std::vector<common::Value> values;
+        };
+        [[nodiscard]] std::optional<catalog::TableSchema>
+        ResolveClusterTableSchema(const parser::QualifiedName &table_name,
+                                  const core::SessionContext &session) const;
+        [[nodiscard]] std::optional<std::string>
+        ResolveClusterDatabaseName(const parser::QualifiedName &table_name,
+                                   const core::SessionContext &session) const;
+        [[nodiscard]] std::optional<std::string>
+        ResolveShardKeyColumn(const catalog::TableSchema &schema) const;
+        [[nodiscard]] std::optional<common::Value>
+        TryExtractShardKeyValue(const parser::Expression &expr,
+                                const std::string &shard_key_column) const;
         [[nodiscard]] std::optional<std::size_t>
         RouteNodeIndex(const parser::Statement &statement,
-                       const std::vector<StorageNodeEndpoint> &nodes) const;
+                       const std::vector<StorageNodeEndpoint> &nodes,
+                       const core::SessionContext &session) const;
+        [[nodiscard]] ShardRoutingDecision
+        RouteValueToNode(const common::Value &value,
+                         const std::vector<StorageNodeEndpoint> &nodes) const;
         [[nodiscard]] std::optional<std::string>
         ExtractTargetTableName(const parser::Statement &statement) const;
         [[nodiscard]] bool ShouldBroadcast(const parser::Statement &statement) const;
         [[nodiscard]] bool IsSelectStatement(const parser::Statement &statement) const;
         [[nodiscard]] bool IsMutatingStatement(const parser::Statement &statement) const;
+        [[nodiscard]] bool IsMetadataStatement(const parser::Statement &statement) const;
+        [[nodiscard]] std::string RenderLiteralSql(const common::Value &value) const;
+        [[nodiscard]] std::string RenderInsertSql(
+            const parser::QualifiedName &table_name,
+            const std::vector<std::string> &column_names,
+            const std::vector<std::vector<common::Value>> &rows) const;
+        [[nodiscard]] std::string
+        RenderCreateTableSql(const catalog::TableSchema &schema) const;
+        [[nodiscard]] std::optional<std::unordered_map<std::size_t, std::string>>
+        SplitInsertByShard(const parser::InsertStatement &insert,
+                           const std::vector<StorageNodeEndpoint> &nodes,
+                           const core::SessionContext &session) const;
+        [[nodiscard]] std::optional<std::vector<DumpedTableRow>>
+        FetchTableDump(const StorageNodeEndpoint &node,
+                       const std::string &database_name,
+                       const std::string &table_name) const;
+        [[nodiscard]] bool
+        RebalanceClusterData(const std::vector<StorageNodeEndpoint> &source_nodes,
+                             const std::vector<StorageNodeEndpoint> &target_nodes,
+                             bool truncate_targets) const;
+        [[nodiscard]] bool
+        SyncMetadataToNodes(
+            const std::vector<StorageNodeEndpoint> &target_nodes) const;
+        [[nodiscard]] std::optional<network::ResponseEnvelope>
+        ExecutePreparedRequests(
+            const std::vector<std::pair<StorageNodeEndpoint, std::string>> &prepared,
+            const network::RequestEnvelope &request) const;
         [[nodiscard]] std::string
         QueryResultToJson(const execution::QueryResult &result) const;
         [[nodiscard]] std::optional<network::ResponseEnvelope>
         ExecuteTwoPhaseCommit(const std::vector<StorageNodeEndpoint> &nodes,
                               const network::RequestEnvelope &request) const;
+        [[nodiscard]] std::optional<network::ResponseEnvelope>
+        ExecuteTwoPhaseCommit(
+            const std::vector<std::pair<StorageNodeEndpoint, std::string>> &prepared,
+            const network::RequestEnvelope &request) const;
         [[nodiscard]] std::optional<network::ResponseEnvelope>
         BroadcastToStorageNodes(const std::vector<StorageNodeEndpoint> &nodes,
                                 const network::RequestEnvelope &request,
