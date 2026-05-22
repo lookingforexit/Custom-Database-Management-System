@@ -1,21 +1,34 @@
 #pragma once
 
-// this file defines append-only history storage used by revert support.
-#include <cstdint>
+// this file defines append-only delta history used by temporal REVERT.
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "catalog/schema.hpp"
 #include "common/types.hpp"
 
 namespace dbms::versioning {
 
+    enum class ChangeKind {
+        kCreateDatabase,
+        kDropDatabase,
+        kCreateTable,
+        kDropTable,
+        kInsertRow,
+        kUpdateRow,
+        kDeleteRow,
+    };
+
     struct ChangeRecord {
+        ChangeKind kind{ChangeKind::kInsertRow};
         std::string database_name;
         std::string table_name;
-        std::string operation;
         std::string timestamp;
-        std::vector<common::RowData> snapshot_rows;
+        common::RowId row_id{common::kInvalidRowId};
+        std::optional<catalog::TableSchema> schema;
+        std::optional<common::RowData> before_row;
+        std::optional<common::RowData> after_row;
     };
 
     class VersionStore {
@@ -27,17 +40,16 @@ namespace dbms::versioning {
         [[nodiscard]] std::vector<ChangeRecord>
         HistoryForTable(const std::string &database_name,
                         const std::string &table_name) const;
-        [[nodiscard]] std::optional<ChangeRecord>
-        SnapshotAtOrBefore(const std::string &database_name,
-                           const std::string &table_name,
-                           const std::string &timestamp) const;
-        [[nodiscard]] std::optional<ChangeRecord>
-        SnapshotExact(const std::string &database_name,
-                      const std::string &table_name,
-                      const std::string &timestamp) const;
-        [[nodiscard]] std::optional<ChangeRecord>
-        LatestSnapshot(const std::string &database_name,
-                       const std::string &table_name) const;
+        [[nodiscard]] std::optional<std::string>
+        LatestTimestampForTable(const std::string &database_name,
+                                const std::string &table_name) const;
+        [[nodiscard]] std::optional<std::string>
+        LatestTimestampAtOrBefore(const std::string &database_name,
+                                  const std::string &table_name,
+                                  const std::string &timestamp) const;
+        [[nodiscard]] bool HasExactTimestampForTable(
+            const std::string &database_name, const std::string &table_name,
+            const std::string &timestamp) const;
 
       private:
         [[nodiscard]] static std::string GenerateTimestamp();

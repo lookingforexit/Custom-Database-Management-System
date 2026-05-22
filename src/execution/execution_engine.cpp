@@ -148,18 +148,93 @@ namespace dbms::execution {
             }
         }
 
-        void RecordTableSnapshot(versioning::VersionStore &version_store,
-                                 const std::string &database_name,
-                                 const core::TableRuntime &table_runtime,
-                                 const std::string &operation) {
-            const auto timestamp = version_store.Append(versioning::ChangeRecord{
+        bool RowValuesEqual(const common::RowData &lhs,
+                            const common::RowData &rhs) {
+            if (lhs.values.size() != rhs.values.size()) {
+                return false;
+            }
+            for (std::size_t index = 0; index < lhs.values.size(); ++index) {
+                if (common::GetValueType(lhs.values[index]) !=
+                    common::GetValueType(rhs.values[index])) {
+                    return false;
+                }
+                if (common::CompareValues(lhs.values[index], rhs.values[index]) != 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        void AppendChangeEvent(versioning::VersionStore &version_store,
+                               versioning::ChangeKind kind,
+                               const std::string &database_name,
+                               const std::string &table_name,
+                               std::optional<catalog::TableSchema> schema,
+                               std::optional<common::RowData> before_row,
+                               std::optional<common::RowData> after_row) {
+            (void)version_store.Append(versioning::ChangeRecord{
+                .kind = kind,
                 .database_name = database_name,
-                .table_name = table_runtime.schema.table_name,
-                .operation = operation,
-                .timestamp = "",
-                .snapshot_rows = table_runtime.heap->ScanAll(),
+                .table_name = table_name,
+                .row_id = after_row.has_value()
+                              ? after_row->row_id
+                              : (before_row.has_value() ? before_row->row_id
+                                                        : common::kInvalidRowId),
+                .schema = std::move(schema),
+                .before_row = std::move(before_row),
+                .after_row = std::move(after_row),
             });
-            (void)timestamp;
+        }
+
+        common::Result<std::vector<common::RowData>>
+        ReconstructTableStateAt(const versioning::VersionStore &version_store,
+                                const std::string &database_name,
+                                const std::string &table_name,
+                                const std::string &timestamp) {
+            std::unordered_map<common::RowId, common::RowData> rows_by_id;
+            for (const auto &record :
+                 version_store.HistoryForTable(database_name, table_name)) {
+                if (record.timestamp > timestamp) {
+                    continue;
+                }
+                switch (record.kind) {
+                    case versioning::ChangeKind::kCreateTable:
+                        rows_by_id.clear();
+                        break;
+                    case versioning::ChangeKind::kDropTable:
+                        rows_by_id.clear();
+                        break;
+                    case versioning::ChangeKind::kInsertRow:
+                        if (record.after_row.has_value()) {
+                            rows_by_id[record.after_row->row_id] = *record.after_row;
+                        }
+                        break;
+                    case versioning::ChangeKind::kUpdateRow:
+                        if (record.after_row.has_value()) {
+                            rows_by_id[record.after_row->row_id] = *record.after_row;
+                        }
+                        break;
+                    case versioning::ChangeKind::kDeleteRow:
+                        if (record.before_row.has_value()) {
+                            rows_by_id.erase(record.before_row->row_id);
+                        }
+                        break;
+                    case versioning::ChangeKind::kCreateDatabase:
+                    case versioning::ChangeKind::kDropDatabase:
+                        break;
+                }
+            }
+            std::vector<common::RowData> rows;
+            rows.reserve(rows_by_id.size());
+            for (auto &[row_id, row] : rows_by_id) {
+                (void)row_id;
+                rows.push_back(std::move(row));
+            }
+            std::sort(rows.begin(), rows.end(),
+                      [](const common::RowData &lhs, const common::RowData &rhs) {
+                          return lhs.row_id < rhs.row_id;
+                      });
+            return common::MakeSuccess(std::move(rows));
         }
 
         common::Result<bool> EvaluatePredicate(const parser::Expression &expr,
@@ -513,6 +588,10 @@ namespace dbms::execution {
             db.name = create_db->database_name;
             runtime_state_.databases.emplace(create_db->database_name,
                                              std::move(db));
+            AppendChangeEvent(version_store_,
+                              versioning::ChangeKind::kCreateDatabase,
+                              create_db->database_name, "", std::nullopt,
+                              std::nullopt, std::nullopt);
             result.message = "database created";
             return common::MakeSuccess(std::move(result));
         }
@@ -543,6 +622,10 @@ namespace dbms::execution {
             if (session.current_database == drop_db->database_name) {
                 session.current_database.clear();
             }
+            AppendChangeEvent(version_store_,
+                              versioning::ChangeKind::kDropDatabase,
+                              drop_db->database_name, "", std::nullopt,
+                              std::nullopt, std::nullopt);
             result.message = "database dropped";
             return common::MakeSuccess(std::move(result));
         }
@@ -604,9 +687,10 @@ namespace dbms::execution {
             }
             db_it->second.tables.emplace(schema.table_name,
                                          std::move(table_runtime));
-            RecordTableSnapshot(version_store_, *db_name.value,
-                                db_it->second.tables.at(schema.table_name),
-                                "CREATE_TABLE");
+            AppendChangeEvent(version_store_,
+                              versioning::ChangeKind::kCreateTable,
+                              *db_name.value, schema.table_name, schema,
+                              std::nullopt, std::nullopt);
             catalog_.RegisterTable(std::move(schema));
             result.message = "table created";
             return common::MakeSuccess(std::move(result));
@@ -632,7 +716,13 @@ namespace dbms::execution {
                     common::ErrorCode::kNotFound,
                     "table not found: " + drop_table->table_name.object_name);
             }
+            const auto dropped_schema =
+                db_it->second.tables.at(drop_table->table_name.object_name).schema;
             db_it->second.tables.erase(drop_table->table_name.object_name);
+            AppendChangeEvent(version_store_,
+                              versioning::ChangeKind::kDropTable,
+                              *db_name.value, drop_table->table_name.object_name,
+                              dropped_schema, std::nullopt, std::nullopt);
             result.message = "table dropped";
             return common::MakeSuccess(std::move(result));
         }
@@ -714,6 +804,7 @@ namespace dbms::execution {
                 }
 
                 const auto row_id = table.heap->Insert(row);
+                row.row_id = row_id;
                 for (const auto &[column, index_ptr] : table.indexes) {
                     auto idx = FindColumnIndex(table.schema, column);
                     if (idx.has_value()) {
@@ -723,8 +814,11 @@ namespace dbms::execution {
                             row_id);
                     }
                 }
+                AppendChangeEvent(version_store_,
+                                  versioning::ChangeKind::kInsertRow,
+                                  *db_name.value, table.schema.table_name,
+                                  std::nullopt, std::nullopt, row);
             }
-            RecordTableSnapshot(version_store_, *db_name.value, table, "INSERT");
             result.message = "rows inserted";
             return common::MakeSuccess(std::move(result));
         }
@@ -772,6 +866,8 @@ namespace dbms::execution {
                     continue;
                 }
 
+                const common::RowData before_row = row;
+
                 for (const auto &assignment : update_statement->assignments) {
                     auto column_index = FindColumnIndex(table_runtime.schema,
                                                         assignment.column_name);
@@ -799,6 +895,11 @@ namespace dbms::execution {
                         row_validation.error->code,
                         row_validation.error->message);
                 }
+                AppendChangeEvent(version_store_,
+                                  versioning::ChangeKind::kUpdateRow,
+                                  *database_name.value,
+                                  table_runtime.schema.table_name,
+                                  std::nullopt, before_row, row);
                 ++updated_count;
             }
 
@@ -808,8 +909,6 @@ namespace dbms::execution {
                     index_rebuild.error->code, index_rebuild.error->message);
             }
             table_runtime.heap->ReplaceAll(std::move(rows));
-            RecordTableSnapshot(version_store_, *database_name.value,
-                                table_runtime, "UPDATE");
             result.message =
                 "updated " + std::to_string(updated_count) + " row(s)";
             return common::MakeSuccess(std::move(result));
@@ -857,6 +956,11 @@ namespace dbms::execution {
                     should_delete = *predicate_result.value;
                 }
                 if (should_delete) {
+                    AppendChangeEvent(version_store_,
+                                      versioning::ChangeKind::kDeleteRow,
+                                      *database_name.value,
+                                      table_runtime.schema.table_name,
+                                      std::nullopt, row, std::nullopt);
                     ++deleted_count;
                     continue;
                 }
@@ -869,8 +973,6 @@ namespace dbms::execution {
                     index_rebuild.error->code, index_rebuild.error->message);
             }
             table_runtime.heap->ReplaceAll(std::move(kept_rows));
-            RecordTableSnapshot(version_store_, *database_name.value,
-                                table_runtime, "DELETE");
             result.message =
                 "deleted " + std::to_string(deleted_count) + " row(s)";
             return common::MakeSuccess(std::move(result));
@@ -1053,9 +1155,9 @@ namespace dbms::execution {
                     "table not found: " + revert->table_name.object_name);
             }
 
-            std::optional<versioning::ChangeRecord> snapshot;
+            std::optional<std::string> target_timestamp;
             if (revert->mode == parser::RevertStatement::RevertMode::kLatest) {
-                snapshot = version_store_.LatestSnapshot(
+                target_timestamp = version_store_.LatestTimestampForTable(
                     *database_name.value, revert->table_name.object_name);
             } else {
                 static const std::regex timestamp_pattern(
@@ -1068,41 +1170,86 @@ namespace dbms::execution {
 
                 if (revert->mode ==
                     parser::RevertStatement::RevertMode::kExact) {
-                    snapshot = version_store_.SnapshotExact(
+                    if (version_store_.HasExactTimestampForTable(
                         *database_name.value, revert->table_name.object_name,
-                        revert->timestamp);
+                        revert->timestamp)) {
+                        target_timestamp = revert->timestamp;
+                    }
                 } else {
-                    snapshot = version_store_.SnapshotAtOrBefore(
+                    target_timestamp = version_store_.LatestTimestampAtOrBefore(
                         *database_name.value, revert->table_name.object_name,
                         revert->timestamp);
                 }
             }
 
-            if (!snapshot.has_value()) {
+            if (!target_timestamp.has_value()) {
                 return common::MakeError<QueryResult>(
                     common::ErrorCode::kNotFound,
-                    "no snapshot available for REVERT");
+                    "no history available for REVERT");
             }
 
             auto &table_runtime = table_it->second;
-            for (const auto &row : snapshot->snapshot_rows) {
+            auto target_rows = ReconstructTableStateAt(
+                version_store_, *database_name.value,
+                revert->table_name.object_name, *target_timestamp);
+            if (!target_rows.ok()) {
+                return common::MakeError<QueryResult>(target_rows.error->code,
+                                                      target_rows.error->message);
+            }
+            for (const auto &row : *target_rows.value) {
                 if (row.values.size() != table_runtime.schema.columns.size()) {
                     return common::MakeError<QueryResult>(
                         common::ErrorCode::kValidationError,
-                        "snapshot row shape mismatch for table schema");
+                        "history row shape mismatch for table schema");
+                }
+            }
+
+            const auto current_rows = table_runtime.heap->ScanAll();
+            std::unordered_map<common::RowId, common::RowData> current_by_id;
+            std::unordered_map<common::RowId, common::RowData> target_by_id;
+            for (const auto &row : current_rows) {
+                current_by_id.emplace(row.row_id, row);
+            }
+            for (const auto &row : *target_rows.value) {
+                target_by_id.emplace(row.row_id, row);
+            }
+            for (const auto &[row_id, current_row] : current_by_id) {
+                const auto target_it = target_by_id.find(row_id);
+                if (target_it == target_by_id.end()) {
+                    AppendChangeEvent(version_store_,
+                                      versioning::ChangeKind::kDeleteRow,
+                                      *database_name.value,
+                                      table_runtime.schema.table_name,
+                                      std::nullopt, current_row, std::nullopt);
+                    continue;
+                }
+                if (!RowValuesEqual(current_row, target_it->second)) {
+                    AppendChangeEvent(version_store_,
+                                      versioning::ChangeKind::kUpdateRow,
+                                      *database_name.value,
+                                      table_runtime.schema.table_name,
+                                      std::nullopt, current_row,
+                                      target_it->second);
+                }
+            }
+            for (const auto &[row_id, target_row] : target_by_id) {
+                if (!current_by_id.contains(row_id)) {
+                    AppendChangeEvent(version_store_,
+                                      versioning::ChangeKind::kInsertRow,
+                                      *database_name.value,
+                                      table_runtime.schema.table_name,
+                                      std::nullopt, std::nullopt, target_row);
                 }
             }
 
             auto index_rebuild =
-                RebuildIndexes(table_runtime, snapshot->snapshot_rows);
+                RebuildIndexes(table_runtime, *target_rows.value);
             if (!index_rebuild.ok()) {
                 return common::MakeError<QueryResult>(
                     index_rebuild.error->code, index_rebuild.error->message);
             }
-            table_runtime.heap->ReplaceAll(snapshot->snapshot_rows);
-            RecordTableSnapshot(version_store_, *database_name.value,
-                                table_runtime, "REVERT");
-            result.message = "reverted to " + snapshot->timestamp;
+            table_runtime.heap->ReplaceAll(std::move(*target_rows.value));
+            result.message = "reverted to " + *target_timestamp;
             return common::MakeSuccess(std::move(result));
         }
 

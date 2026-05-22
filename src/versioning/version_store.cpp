@@ -4,7 +4,8 @@
 #include <iomanip>
 #include <sstream>
 
-// this file implements change-log storage used for time-based restoration.
+// this file implements append-only change-log storage used for event-based
+// temporal restoration.
 namespace dbms::versioning {
 
     std::string VersionStore::Append(ChangeRecord record) {
@@ -38,52 +39,49 @@ namespace dbms::versioning {
         return result;
     }
 
-    std::optional<ChangeRecord> VersionStore::SnapshotAtOrBefore(
-        const std::string &database_name, const std::string &table_name,
-        const std::string &timestamp) const {
-        std::optional<ChangeRecord> best;
+    std::optional<std::string>
+    VersionStore::LatestTimestampForTable(const std::string &database_name,
+                                          const std::string &table_name) const {
+        std::optional<std::string> latest;
         for (const auto &record : records_) {
             if (record.database_name != database_name ||
                 record.table_name != table_name) {
                 continue;
             }
-            if (record.timestamp > timestamp) {
+            if (!latest.has_value() || *latest < record.timestamp) {
+                latest = record.timestamp;
+            }
+        }
+        return latest;
+    }
+
+    std::optional<std::string> VersionStore::LatestTimestampAtOrBefore(
+        const std::string &database_name, const std::string &table_name,
+        const std::string &timestamp) const {
+        std::optional<std::string> best;
+        for (const auto &record : records_) {
+            if (record.database_name != database_name ||
+                record.table_name != table_name || record.timestamp > timestamp) {
                 continue;
             }
-            if (!best.has_value() || best->timestamp < record.timestamp) {
-                best = record;
+            if (!best.has_value() || *best < record.timestamp) {
+                best = record.timestamp;
             }
         }
         return best;
     }
 
-    std::optional<ChangeRecord> VersionStore::SnapshotExact(
+    bool VersionStore::HasExactTimestampForTable(
         const std::string &database_name, const std::string &table_name,
         const std::string &timestamp) const {
         for (const auto &record : records_) {
             if (record.database_name == database_name &&
                 record.table_name == table_name &&
                 record.timestamp == timestamp) {
-                return record;
+                return true;
             }
         }
-        return std::nullopt;
-    }
-
-    std::optional<ChangeRecord>
-    VersionStore::LatestSnapshot(const std::string &database_name,
-                                 const std::string &table_name) const {
-        std::optional<ChangeRecord> latest;
-        for (const auto &record : records_) {
-            if (record.database_name != database_name ||
-                record.table_name != table_name) {
-                continue;
-            }
-            if (!latest.has_value() || latest->timestamp < record.timestamp) {
-                latest = record;
-            }
-        }
-        return latest;
+        return false;
     }
 
     std::string VersionStore::GenerateTimestamp() {

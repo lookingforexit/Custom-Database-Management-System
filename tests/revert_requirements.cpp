@@ -1,6 +1,7 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 #include "common/error.hpp"
@@ -62,30 +63,78 @@ int main() {
         std::filesystem::remove_all(root);
     }
 
+    // Persisted history must be event-based and must not contain snapshot dumps.
+    {
+        const std::string root = "./test_data_revert_history_audit";
+        std::filesystem::remove_all(root);
+
+        dbms::core::DbmsEngine engine(root);
+        dbms::core::SessionContext session;
+        session.client_id = "revert_history_audit";
+
+        assert(engine.ExecuteSql(session, "CREATE DATABASE audit;").ok());
+        assert(engine.ExecuteSql(session, "USE audit;").ok());
+        assert(engine.ExecuteSql(
+                          session,
+                          "CREATE TABLE t (id INT INDEXED, name STRING);")
+                   .ok());
+        for (int index = 1; index <= 4; ++index) {
+            assert(engine.ExecuteSql(
+                              session,
+                              "INSERT INTO t (id, name) VALUES (" +
+                                  std::to_string(index) + ", \"same\");")
+                       .ok());
+        }
+        assert(engine.ExecuteSql(
+                          session, "UPDATE t SET name = \"other\" WHERE id == 2;")
+                   .ok());
+        assert(engine.ExecuteSql(session, "DELETE FROM t WHERE id == 3;").ok());
+
+        std::ifstream history(root + "/version_history.tsv");
+        assert(history.is_open());
+        std::stringstream buffer;
+        buffer << history.rdbuf();
+        const std::string content = buffer.str();
+        assert(content.find("FORMAT\t3") != std::string::npos);
+        assert(content.find("EVENT\tkind=INSERT_ROW") != std::string::npos);
+        assert(content.find("EVENT\tkind=UPDATE_ROW") != std::string::npos);
+        assert(content.find("EVENT\tkind=DELETE_ROW") != std::string::npos);
+        assert(content.find("BEFORE\t") != std::string::npos);
+        assert(content.find("AFTER\t") != std::string::npos);
+        assert(content.find("SNAPSHOT_ROW") == std::string::npos);
+        assert(content.find("snapshot_rows") == std::string::npos);
+
+        std::filesystem::remove_all(root);
+    }
+
     // Boundary checks for dense timestamps.
     {
         dbms::versioning::VersionStore store;
-        const auto t1 = store.Append({.database_name = "db",
+        const auto t1 = store.Append({.kind = dbms::versioning::ChangeKind::kInsertRow,
+                                      .database_name = "db",
                                       .table_name = "t",
-                                      .operation = "X",
-                                      .timestamp = "2026.05.20-12:00:00.000001",
-                                      .snapshot_rows = {}});
-        const auto t2 = store.Append({.database_name = "db",
+                                      .timestamp = "2026.05.20-12:00:00.000001"});
+        const auto t2 = store.Append({.kind = dbms::versioning::ChangeKind::kUpdateRow,
+                                      .database_name = "db",
                                       .table_name = "t",
-                                      .operation = "Y",
-                                      .timestamp = "2026.05.20-12:00:00.000002",
-                                      .snapshot_rows = {}});
+                                      .timestamp = "2026.05.20-12:00:00.000002"});
         assert(!t1.empty());
         assert(!t2.empty());
 
-        auto exact = store.SnapshotExact("db", "t", "2026.05.20-12:00:00.000001");
-        assert(exact.has_value());
-        assert(exact->operation == "X");
+        assert(store.HasExactTimestampForTable(
+            "db", "t", "2026.05.20-12:00:00.000001"));
+        assert(store.LatestTimestampForTable("db", "t").has_value());
+        assert(*store.LatestTimestampForTable("db", "t") ==
+               "2026.05.20-12:00:00.000002");
 
         auto at_or_before =
-            store.SnapshotAtOrBefore("db", "t", "2026.05.20-12:00:00.000001");
+            store.LatestTimestampAtOrBefore("db", "t",
+                                            "2026.05.20-12:00:00.000001");
         assert(at_or_before.has_value());
-        assert(at_or_before->operation == "X");
+        assert(*at_or_before == "2026.05.20-12:00:00.000001");
+        assert(!store.LatestTimestampAtOrBefore(
+                         "db", "t", "2026.05.20-11:59:59.999999")
+                    .has_value());
     }
 
     // Corrupted/incompatible version history should fail loading.
@@ -96,7 +145,7 @@ int main() {
 
         {
             std::ofstream state(root + "/runtime_state.tsv", std::ios::trunc);
-            state << "FORMAT\t2\n";
+            state << "FORMAT\t3\n";
         }
         {
             std::ofstream history(root + "/version_history.tsv", std::ios::trunc);
@@ -111,10 +160,10 @@ int main() {
 
         {
             std::ofstream history(root + "/version_history.tsv", std::ios::trunc);
-            history << "FORMAT\t2\n";
-            history << "CHANGE\tdb\tt\tINSERT\t2026.05.20-12:00:00.000001\n";
-            history << "SNAPSHOT_ROW\tI:1\tS:A\n";
-            // Missing CHANGE_END -> malformed.
+            history << "FORMAT\t3\n";
+            history << "EVENT\tkind=INSERT_ROW\tdb=x\ttable=t\ttimestamp=2026.05.20-12:00:00.000001\trow_id=1\n";
+            history << "AFTER\trow_id=1\tvalue=Int:1\tvalue=String:A\n";
+            // Missing EVENT_END -> malformed.
         }
         assert(!persistence.Load(runtime_state, version_store, string_pool));
 

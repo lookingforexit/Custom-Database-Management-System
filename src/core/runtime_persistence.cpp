@@ -18,17 +18,16 @@ namespace dbms::core {
     namespace {
 
         constexpr std::string_view kFormatTag = "FORMAT";
-        constexpr std::string_view kFormatVersion = "2";
+        constexpr std::string_view kFormatVersion = "3";
 
         bool IsSupportedFormatVersion(const std::string &version) {
-            return version == "1" || version == "2";
+            return version == "3";
         }
 
         bool ParseKeyValueToken(const std::string &token, std::string &key,
                                 std::string &value) {
             const auto position = token.find('=');
-            if (position == std::string::npos || position == 0 ||
-                position + 1 >= token.size()) {
+            if (position == std::string::npos || position == 0) {
                 return false;
             }
             key = token.substr(0, position);
@@ -74,6 +73,52 @@ namespace dbms::core {
                     return "INDEXED";
             }
             return "UNKNOWN";
+        }
+
+        std::string ChangeKindName(versioning::ChangeKind kind) {
+            switch (kind) {
+                case versioning::ChangeKind::kCreateDatabase:
+                    return "CREATE_DATABASE";
+                case versioning::ChangeKind::kDropDatabase:
+                    return "DROP_DATABASE";
+                case versioning::ChangeKind::kCreateTable:
+                    return "CREATE_TABLE";
+                case versioning::ChangeKind::kDropTable:
+                    return "DROP_TABLE";
+                case versioning::ChangeKind::kInsertRow:
+                    return "INSERT_ROW";
+                case versioning::ChangeKind::kUpdateRow:
+                    return "UPDATE_ROW";
+                case versioning::ChangeKind::kDeleteRow:
+                    return "DELETE_ROW";
+            }
+            return "UNKNOWN";
+        }
+
+        std::optional<versioning::ChangeKind>
+        ParseChangeKind(const std::string &value) {
+            if (value == "CREATE_DATABASE") {
+                return versioning::ChangeKind::kCreateDatabase;
+            }
+            if (value == "DROP_DATABASE") {
+                return versioning::ChangeKind::kDropDatabase;
+            }
+            if (value == "CREATE_TABLE") {
+                return versioning::ChangeKind::kCreateTable;
+            }
+            if (value == "DROP_TABLE") {
+                return versioning::ChangeKind::kDropTable;
+            }
+            if (value == "INSERT_ROW") {
+                return versioning::ChangeKind::kInsertRow;
+            }
+            if (value == "UPDATE_ROW") {
+                return versioning::ChangeKind::kUpdateRow;
+            }
+            if (value == "DELETE_ROW") {
+                return versioning::ChangeKind::kDeleteRow;
+            }
+            return std::nullopt;
         }
 
         std::string Escape(std::string value) {
@@ -291,24 +336,47 @@ namespace dbms::core {
             return false;
         }
         history_output << kFormatTag << "\t" << kFormatVersion << "\n";
-        history_output << "# Version history dump (human-readable)\n";
+        history_output << "# Version history dump (event-based)\n";
         history_output << "# Records:\n";
-        history_output << "# CHANGE\\tdb=<db>\\ttable=<table>\\toperation=<op>\\ttimestamp=<ts>\n";
-        history_output << "# SNAPSHOT_ROW\\tvalue=<...>\\tvalue=<...>\n";
-        history_output << "# CHANGE_END\n";
+        history_output << "# EVENT\\tkind=<kind>\\tdb=<db>\\ttable=<table>\\ttimestamp=<ts>\\trow_id=<id>\n";
+        history_output << "# SCHEMA_COLUMN\\tname=<column>\\ttype=<type>\\tconstraint=<constraint>\\tdefault=<value>\n";
+        history_output << "# BEFORE\\tvalue=<...>\\tvalue=<...>\n";
+        history_output << "# AFTER\\tvalue=<...>\\tvalue=<...>\n";
+        history_output << "# EVENT_END\n";
         for (const auto &record : version_store.AllRecords()) {
-            history_output << "CHANGE\tdb=" << Escape(record.database_name)
+            history_output << "EVENT\tkind=" << ChangeKindName(record.kind)
+                           << "\tdb=" << Escape(record.database_name)
                            << "\ttable=" << Escape(record.table_name)
-                           << "\toperation=" << Escape(record.operation)
-                           << "\ttimestamp=" << Escape(record.timestamp) << "\n";
-            for (const auto &row : record.snapshot_rows) {
-                history_output << "SNAPSHOT_ROW";
-                for (const auto &value : row.values) {
+                           << "\ttimestamp=" << Escape(record.timestamp)
+                           << "\trow_id=" << record.row_id << "\n";
+            if (record.schema.has_value()) {
+                for (const auto &column : record.schema->columns) {
+                    history_output << "SCHEMA_COLUMN\tname=" << Escape(column.name)
+                                   << "\ttype=" << ValueTypeName(column.type)
+                                   << "\tconstraint="
+                                   << ConstraintName(column.constraint)
+                                   << "\tdefault="
+                                   << (column.default_value.has_value()
+                                           ? EncodeValue(*column.default_value)
+                                           : "Null")
+                                   << "\n";
+                }
+            }
+            if (record.before_row.has_value()) {
+                history_output << "BEFORE\trow_id=" << record.before_row->row_id;
+                for (const auto &value : record.before_row->values) {
                     history_output << "\tvalue=" << EncodeValue(value);
                 }
                 history_output << "\n";
             }
-            history_output << "CHANGE_END\n";
+            if (record.after_row.has_value()) {
+                history_output << "AFTER\trow_id=" << record.after_row->row_id;
+                for (const auto &value : record.after_row->values) {
+                    history_output << "\tvalue=" << EncodeValue(value);
+                }
+                history_output << "\n";
+            }
+            history_output << "EVENT_END\n";
             history_output << "\n";
         }
         history_output.flush();
@@ -639,48 +707,117 @@ namespace dbms::core {
                 }
             }
 
-            if (parts[0] == "CHANGE") {
+            if (parts[0] == "EVENT") {
                 if (pending_record.has_value()) {
                     return false;
                 }
+                const auto kind_field = FindFieldValue(parts, "kind");
                 const auto db_field = FindFieldValue(parts, "db");
                 const auto table_field = FindFieldValue(parts, "table");
-                const auto operation_field = FindFieldValue(parts, "operation");
                 const auto timestamp_field = FindFieldValue(parts, "timestamp");
-                if (db_field.has_value() && table_field.has_value() &&
-                    operation_field.has_value() && timestamp_field.has_value()) {
-                    pending_record = versioning::ChangeRecord{
-                        .database_name = Unescape(*db_field),
-                        .table_name = Unescape(*table_field),
-                        .operation = Unescape(*operation_field),
-                        .timestamp = Unescape(*timestamp_field),
-                        .snapshot_rows = {},
-                    };
-                    continue;
+                const auto row_id_field = FindFieldValue(parts, "row_id");
+                if (!kind_field.has_value() || !db_field.has_value() ||
+                    !table_field.has_value() || !timestamp_field.has_value()) {
+                    return false;
                 }
-                if (parts.size() == 5) {
-                    pending_record = versioning::ChangeRecord{
-                        .database_name = Unescape(parts[1]),
-                        .table_name = Unescape(parts[2]),
-                        .operation = Unescape(parts[3]),
-                        .timestamp = Unescape(parts[4]),
-                        .snapshot_rows = {},
-                    };
-                    continue;
+                const auto kind = ParseChangeKind(*kind_field);
+                if (!kind.has_value()) {
+                    return false;
                 }
-                return false;
+                pending_record = versioning::ChangeRecord{
+                    .kind = *kind,
+                    .database_name = Unescape(*db_field),
+                    .table_name = Unescape(*table_field),
+                    .timestamp = Unescape(*timestamp_field),
+                };
+                if (row_id_field.has_value()) {
+                    try {
+                        pending_record->row_id =
+                            static_cast<common::RowId>(std::stoull(*row_id_field));
+                    } catch (...) {
+                        return false;
+                    }
+                }
+                continue;
             }
-            if (parts[0] == "SNAPSHOT_ROW") {
+            if (parts[0] == "SCHEMA_COLUMN") {
+                if (!pending_record.has_value()) {
+                    return false;
+                }
+                if (!pending_record->schema.has_value()) {
+                    pending_record->schema = catalog::TableSchema{
+                        .database_name = pending_record->database_name,
+                        .table_name = pending_record->table_name,
+                    };
+                }
+                const auto name_field = FindFieldValue(parts, "name");
+                const auto type_field = FindFieldValue(parts, "type");
+                const auto constraint_field = FindFieldValue(parts, "constraint");
+                const auto default_field = FindFieldValue(parts, "default");
+                if (!name_field.has_value() || !type_field.has_value() ||
+                    !constraint_field.has_value() || !default_field.has_value()) {
+                    return false;
+                }
+                catalog::ColumnDefinition column;
+                column.name = Unescape(*name_field);
+                if (*type_field == "INT") {
+                    column.type = common::ValueType::kInt64;
+                } else if (*type_field == "STRING") {
+                    column.type = common::ValueType::kString;
+                } else if (*type_field == "NULL") {
+                    column.type = common::ValueType::kNull;
+                } else {
+                    return false;
+                }
+                if (*constraint_field == "NONE") {
+                    column.constraint = catalog::ColumnConstraint::kNone;
+                } else if (*constraint_field == "NOT_NULL") {
+                    column.constraint = catalog::ColumnConstraint::kNotNull;
+                } else if (*constraint_field == "INDEXED") {
+                    column.constraint = catalog::ColumnConstraint::kIndexed;
+                } else {
+                    return false;
+                }
+                auto default_value = TryDecodeValue(*default_field);
+                if (!default_value.has_value()) {
+                    return false;
+                }
+                if (!std::holds_alternative<std::monostate>(*default_value)) {
+                    if (std::holds_alternative<std::string>(*default_value)) {
+                        column.default_value = string_pool.Intern(
+                            std::get<std::string>(*default_value));
+                    } else {
+                        column.default_value = *default_value;
+                    }
+                }
+                pending_record->schema->columns.push_back(std::move(column));
+                continue;
+            }
+            if (parts[0] == "BEFORE" || parts[0] == "AFTER") {
                 if (!pending_record.has_value()) {
                     return false;
                 }
                 common::RowData row;
+                const auto row_id_field = FindFieldValue(parts, "row_id");
+                if (row_id_field.has_value()) {
+                    try {
+                        row.row_id =
+                            static_cast<common::RowId>(std::stoull(*row_id_field));
+                    } catch (...) {
+                        return false;
+                    }
+                }
                 for (std::size_t index = 1; index < parts.size(); ++index) {
                     std::string encoded_value = parts[index];
                     std::string key;
                     std::string value;
-                    if (ParseKeyValueToken(parts[index], key, value) &&
-                        key == "value") {
+                    if (ParseKeyValueToken(parts[index], key, value)) {
+                        if (key == "row_id") {
+                            continue;
+                        }
+                        if (key != "value") {
+                            continue;
+                        }
                         encoded_value = value;
                     }
                     const auto decoded_value = TryDecodeValue(encoded_value);
@@ -694,10 +831,14 @@ namespace dbms::core {
                         row.values.push_back(*decoded_value);
                     }
                 }
-                pending_record->snapshot_rows.push_back(std::move(row));
+                if (parts[0] == "BEFORE") {
+                    pending_record->before_row = std::move(row);
+                } else {
+                    pending_record->after_row = std::move(row);
+                }
                 continue;
             }
-            if (parts[0] == "CHANGE_END" && parts.size() == 1) {
+            if (parts[0] == "EVENT_END" && parts.size() == 1) {
                 if (!pending_record.has_value()) {
                     return false;
                 }
