@@ -747,21 +747,174 @@ namespace dbms::server {
             return false;
         }
         const auto command = ToUpper(tokens[1]);
+        if (command == "LOCAL") {
+            response = {.status_code = 200,
+                        .payload = SerializeLocalTelemetry(telemetry_.Snapshot())};
+            return true;
+        }
         if (command != "SNAPSHOT") {
             response = {.status_code = 400,
                         .payload = "type=VALIDATION_ERROR code=3 message=invalid TELEMETRY command sql=\"\""};
             return true;
         }
 
-        const auto snapshot = telemetry_.Snapshot();
+        const auto local_snapshot = telemetry_.Snapshot();
+        std::vector<runtime::TelemetrySnapshot> remote_snapshots;
+        std::size_t nodes_total = 0;
+        std::size_t nodes_available = 0;
+        {
+            std::lock_guard<std::mutex> lock(nodes_mutex_);
+            nodes_total = storage_nodes_.size();
+            for (const auto &node : storage_nodes_) {
+                const network::RequestEnvelope telemetry_request{
+                    .client_id = "__telemetry__",
+                    .jwt_token = "",
+                    .payload = "TELEMETRY LOCAL",
+                };
+                auto node_response = ForwardToStorageNode(node, telemetry_request);
+                if (!node_response.has_value() || node_response->status_code != 200) {
+                    continue;
+                }
+                auto parsed = ParseLocalTelemetry(node_response->payload);
+                if (!parsed.has_value()) {
+                    continue;
+                }
+                ++nodes_available;
+                remote_snapshots.push_back(std::move(*parsed));
+            }
+        }
+        const auto snapshot =
+            AggregateTelemetry(local_snapshot, remote_snapshots);
         std::ostringstream output;
         output << "current_rps=" << snapshot.current_rps
                << " average_rps_10m=" << snapshot.average_rps_10m
                << " max_rps_10m=" << snapshot.max_rps_10m
                << " average_latency_10s_ms=" << snapshot.average_latency_10s_ms
-               << " error_rate_1m=" << snapshot.error_rate_1m;
+               << " error_count_1m=" << snapshot.error_count_1m
+               << " error_rate_1m=" << snapshot.error_rate_1m
+               << " nodes_total=" << (nodes_total + 1)
+               << " nodes_available=" << (nodes_available + 1);
         response = {.status_code = 200, .payload = output.str()};
         return true;
+    }
+
+    std::string EntrypointServer::SerializeLocalTelemetry(
+        const runtime::TelemetrySnapshot &snapshot) const {
+        std::ostringstream output;
+        output << "current_rps=" << snapshot.current_rps
+               << "\taverage_rps_10m=" << snapshot.average_rps_10m
+               << "\tmax_rps_10m=" << snapshot.max_rps_10m
+               << "\taverage_latency_10s_ms=" << snapshot.average_latency_10s_ms
+               << "\terror_count_1m=" << snapshot.error_count_1m
+               << "\terror_rate_1m=" << snapshot.error_rate_1m
+               << "\trequests_1m=" << snapshot.requests_1m
+               << "\tlatency_samples_10s=" << snapshot.latency_samples_10s
+               << "\tlatency_sum_10s_ms=" << snapshot.latency_sum_10s_ms
+               << "\tbuckets=";
+        bool first = true;
+        for (const auto &[second_key, count] : snapshot.requests_per_second_10m) {
+            if (!first) {
+                output << ",";
+            }
+            output << second_key << ":" << count;
+            first = false;
+        }
+        return output.str();
+    }
+
+    std::optional<runtime::TelemetrySnapshot>
+    EntrypointServer::ParseLocalTelemetry(const std::string &payload) const {
+        runtime::TelemetrySnapshot snapshot;
+        const auto parts = SplitByTab(payload);
+        for (const auto &part : parts) {
+            const auto split = part.find('=');
+            if (split == std::string::npos) {
+                continue;
+            }
+            const std::string key = part.substr(0, split);
+            const std::string value = part.substr(split + 1);
+            try {
+                if (key == "current_rps") {
+                    snapshot.current_rps = std::stod(value);
+                } else if (key == "average_rps_10m") {
+                    snapshot.average_rps_10m = std::stod(value);
+                } else if (key == "max_rps_10m") {
+                    snapshot.max_rps_10m = std::stod(value);
+                } else if (key == "average_latency_10s_ms") {
+                    snapshot.average_latency_10s_ms = std::stod(value);
+                } else if (key == "error_count_1m") {
+                    snapshot.error_count_1m =
+                        static_cast<std::uint64_t>(std::stoull(value));
+                } else if (key == "error_rate_1m") {
+                    snapshot.error_rate_1m = std::stod(value);
+                } else if (key == "requests_1m") {
+                    snapshot.requests_1m =
+                        static_cast<std::uint64_t>(std::stoull(value));
+                } else if (key == "latency_samples_10s") {
+                    snapshot.latency_samples_10s =
+                        static_cast<std::uint64_t>(std::stoull(value));
+                } else if (key == "latency_sum_10s_ms") {
+                    snapshot.latency_sum_10s_ms = std::stod(value);
+                } else if (key == "buckets" && !value.empty()) {
+                    std::istringstream bucket_input(value);
+                    std::string bucket;
+                    while (std::getline(bucket_input, bucket, ',')) {
+                        const auto colon = bucket.find(':');
+                        if (colon == std::string::npos) {
+                            return std::nullopt;
+                        }
+                        snapshot.requests_per_second_10m.emplace(
+                            std::stoll(bucket.substr(0, colon)),
+                            static_cast<std::uint64_t>(
+                                std::stoull(bucket.substr(colon + 1))));
+                    }
+                }
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+        return snapshot;
+    }
+
+    runtime::TelemetrySnapshot EntrypointServer::AggregateTelemetry(
+        const runtime::TelemetrySnapshot &local_snapshot,
+        const std::vector<runtime::TelemetrySnapshot> &remote_snapshots) const {
+        runtime::TelemetrySnapshot merged = local_snapshot;
+        for (const auto &snapshot : remote_snapshots) {
+            merged.error_count_1m += snapshot.error_count_1m;
+            merged.requests_1m += snapshot.requests_1m;
+            merged.latency_samples_10s += snapshot.latency_samples_10s;
+            merged.latency_sum_10s_ms += snapshot.latency_sum_10s_ms;
+            for (const auto &[second_key, count] : snapshot.requests_per_second_10m) {
+                merged.requests_per_second_10m[second_key] += count;
+            }
+        }
+        const auto now_second =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        merged.current_rps = static_cast<double>(
+            merged.requests_per_second_10m[now_second]);
+        std::uint64_t total_requests_10m = 0;
+        std::uint64_t max_bucket = 0;
+        for (const auto &[second_key, count] : merged.requests_per_second_10m) {
+            (void)second_key;
+            total_requests_10m += count;
+            max_bucket = std::max(max_bucket, count);
+        }
+        merged.average_rps_10m = static_cast<double>(total_requests_10m) / 600.0;
+        merged.max_rps_10m = static_cast<double>(max_bucket);
+        merged.average_latency_10s_ms =
+            merged.latency_samples_10s == 0
+                ? 0.0
+                : (merged.latency_sum_10s_ms /
+                   static_cast<double>(merged.latency_samples_10s));
+        merged.error_rate_1m =
+            merged.requests_1m == 0
+                ? 0.0
+                : (static_cast<double>(merged.error_count_1m) /
+                   static_cast<double>(merged.requests_1m));
+        return merged;
     }
 
     bool EntrypointServer::ParseAuthCommand(

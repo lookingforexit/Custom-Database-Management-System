@@ -1,6 +1,7 @@
 #include "runtime/telemetry.hpp"
 
-// this file implements rolling rps, latency, and error-rate telemetry stubs.
+// this file implements rolling telemetry windows that can also be merged
+// across storage nodes through per-second request buckets.
 namespace dbms::runtime {
 
     namespace {
@@ -11,21 +12,21 @@ namespace dbms::runtime {
     }
 
     void TelemetryRegistry::RecordSuccess(double latency_ms) {
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::system_clock::now();
         std::lock_guard<std::mutex> lock(mutex_);
         PruneLocked(now);
         events_.push_back({.time = now, .latency_ms = latency_ms, .failed = false});
     }
 
     void TelemetryRegistry::RecordFailure(double latency_ms) {
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::system_clock::now();
         std::lock_guard<std::mutex> lock(mutex_);
         PruneLocked(now);
         events_.push_back({.time = now, .latency_ms = latency_ms, .failed = true});
     }
 
     TelemetrySnapshot TelemetryRegistry::Snapshot() const {
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::system_clock::now();
         std::lock_guard<std::mutex> lock(mutex_);
         PruneLocked(now);
 
@@ -34,42 +35,57 @@ namespace dbms::runtime {
             return snapshot;
         }
 
-        std::uint64_t requests_last_second = 0;
-        std::uint64_t errors_last_minute = 0;
-        double latency_sum_10s = 0.0;
-        std::uint64_t latency_count_10s = 0;
-
         for (const auto &event : events_) {
             const auto age = now - event.time;
-            if (age <= kWindow1Second) {
-                ++requests_last_second;
-            }
-            if (age <= kWindow1Minute && event.failed) {
-                ++errors_last_minute;
+            const auto second_key =
+                std::chrono::duration_cast<std::chrono::seconds>(
+                    event.time.time_since_epoch())
+                    .count();
+            ++snapshot.requests_per_second_10m[second_key];
+            if (age <= kWindow1Minute) {
+                ++snapshot.requests_1m;
+                if (event.failed) {
+                    ++snapshot.error_count_1m;
+                }
             }
             if (age <= kWindow10Seconds) {
-                latency_sum_10s += event.latency_ms;
-                ++latency_count_10s;
+                snapshot.latency_sum_10s_ms += event.latency_ms;
+                ++snapshot.latency_samples_10s;
             }
         }
 
-        const auto total_requests = static_cast<double>(events_.size());
-        const auto span =
-            std::chrono::duration_cast<std::chrono::duration<double>>(
-                events_.back().time - events_.front().time)
+        const auto current_second_key =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                now.time_since_epoch())
                 .count();
+        snapshot.current_rps = static_cast<double>(
+            snapshot.requests_per_second_10m[current_second_key]);
 
-        snapshot.current_rps = static_cast<double>(requests_last_second);
-        snapshot.average_rps_10m = span > 0.0 ? total_requests / span : total_requests;
-        snapshot.max_rps_10m = snapshot.current_rps;
+        std::uint64_t total_requests_10m = 0;
+        std::uint64_t max_bucket = 0;
+        for (const auto &[second_key, count] : snapshot.requests_per_second_10m) {
+            (void)second_key;
+            total_requests_10m += count;
+            max_bucket = std::max(max_bucket, count);
+        }
+        snapshot.average_rps_10m =
+            static_cast<double>(total_requests_10m) / 600.0;
+        snapshot.max_rps_10m = static_cast<double>(max_bucket);
         snapshot.average_latency_10s_ms =
-            latency_count_10s > 0 ? (latency_sum_10s / latency_count_10s) : 0.0;
-        snapshot.error_rate_1m = errors_last_minute;
+            snapshot.latency_samples_10s == 0
+                ? 0.0
+                : (snapshot.latency_sum_10s_ms /
+                   static_cast<double>(snapshot.latency_samples_10s));
+        snapshot.error_rate_1m =
+            snapshot.requests_1m == 0
+                ? 0.0
+                : (static_cast<double>(snapshot.error_count_1m) /
+                   static_cast<double>(snapshot.requests_1m));
         return snapshot;
     }
 
     void TelemetryRegistry::PruneLocked(
-        std::chrono::steady_clock::time_point now) const {
+        std::chrono::system_clock::time_point now) const {
         while (!events_.empty() && now - events_.front().time > kWindow10Minutes) {
             events_.pop_front();
         }

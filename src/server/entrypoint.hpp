@@ -53,6 +53,14 @@ namespace dbms::server {
                                              network::ResponseEnvelope &response);
         [[nodiscard]] bool ParseTelemetryCommand(const std::string &payload,
                                                  network::ResponseEnvelope &response);
+        [[nodiscard]] std::string
+        SerializeLocalTelemetry(const runtime::TelemetrySnapshot &snapshot) const;
+        [[nodiscard]] std::optional<runtime::TelemetrySnapshot>
+        ParseLocalTelemetry(const std::string &payload) const;
+        [[nodiscard]] runtime::TelemetrySnapshot
+        AggregateTelemetry(
+            const runtime::TelemetrySnapshot &local_snapshot,
+            const std::vector<runtime::TelemetrySnapshot> &remote_snapshots) const;
         [[nodiscard]] bool ParseAuthCommand(const network::RequestEnvelope &request,
                                             network::ResponseEnvelope &response);
         [[nodiscard]] std::optional<catalog::Permission>
