@@ -71,8 +71,16 @@ namespace dbms::execution {
             return "S" + common::AsString(value);
         }
 
+        void InternStringValue(common::Value &value,
+                               storage::StringPool &string_pool) {
+            if (std::holds_alternative<std::string>(value)) {
+                value = string_pool.Intern(std::get<std::string>(value));
+            }
+        }
+
         common::Result<bool> ValidateRowAgainstSchema(
-            common::RowData &row, const catalog::TableSchema &schema) {
+            common::RowData &row, const catalog::TableSchema &schema,
+            storage::StringPool &string_pool) {
             for (std::size_t column_index = 0; column_index < schema.columns.size();
                  ++column_index) {
                 const auto &column_definition = schema.columns[column_index];
@@ -80,6 +88,7 @@ namespace dbms::execution {
                     column_definition.default_value.has_value()) {
                     row.values[column_index] = *column_definition.default_value;
                 }
+                InternStringValue(row.values[column_index], string_pool);
 
                 const bool allow_null =
                     column_definition.constraint !=
@@ -141,10 +150,7 @@ namespace dbms::execution {
         void InternStringValues(common::RowData &row,
                                 storage::StringPool &string_pool) {
             for (auto &value : row.values) {
-                if (!std::holds_alternative<std::string>(value)) {
-                    continue;
-                }
-                value = string_pool.Intern(std::get<std::string>(value));
+                InternStringValue(value, string_pool);
             }
         }
 
@@ -666,6 +672,9 @@ namespace dbms::execution {
                     out_col.constraint = catalog::ColumnConstraint::kNone;
                 }
                 out_col.default_value = col.default_value;
+                if (out_col.default_value.has_value()) {
+                    InternStringValue(*out_col.default_value, string_pool_);
+                }
                 schema.columns.push_back(std::move(out_col));
                 if (col.indexed) {
                     schema.indexes.push_back(catalog::IndexDefinition{
@@ -777,7 +786,8 @@ namespace dbms::execution {
                 }
                 InternStringValues(row, string_pool_);
 
-                auto row_validation = ValidateRowAgainstSchema(row, table.schema);
+                auto row_validation =
+                    ValidateRowAgainstSchema(row, table.schema, string_pool_);
                 if (!row_validation.ok()) {
                     return common::MakeError<QueryResult>(
                         row_validation.error->code, row_validation.error->message);
@@ -889,7 +899,8 @@ namespace dbms::execution {
                 InternStringValues(row, string_pool_);
 
                 auto row_validation =
-                    ValidateRowAgainstSchema(row, table_runtime.schema);
+                    ValidateRowAgainstSchema(row, table_runtime.schema,
+                                             string_pool_);
                 if (!row_validation.ok()) {
                     return common::MakeError<QueryResult>(
                         row_validation.error->code,
