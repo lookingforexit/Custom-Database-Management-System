@@ -74,6 +74,18 @@ namespace {
         std::cout << "]\n";
     }
 
+    bool HasNonSpace(const std::string &text) {
+        return text.find_first_not_of(" \t\r\n") != std::string::npos;
+    }
+
+    bool EndsWithSemicolonIgnoringSpaces(const std::string &text) {
+        const auto pos = text.find_last_not_of(" \t\r\n");
+        if (pos == std::string::npos) {
+            return false;
+        }
+        return text[pos] == ';';
+    }
+
     std::vector<std::string> SplitStatements(const std::string &input) {
         std::vector<std::string> statements;
         std::string current;
@@ -207,6 +219,10 @@ namespace {
                         dbms::core::SessionContext &session,
                         const std::string &sql,
                         std::size_t statement_index) {
+        if (!HasNonSpace(sql)) {
+            return 0;
+        }
+
         auto result = engine.ExecuteSql(session, sql);
         if (!result.ok()) {
             std::cout << "error[" << statement_index
@@ -228,6 +244,10 @@ namespace {
                               const std::string &jwt_token,
                               const std::string &sql,
                               std::size_t statement_index) {
+        if (!HasNonSpace(sql)) {
+            return 0;
+        }
+
         const dbms::network::RequestEnvelope request{
             .client_id = client_id,
             .jwt_token = jwt_token,
@@ -362,33 +382,41 @@ int main(int argc, char **argv) {
     while (std::getline(std::cin, line)) {
         buffer += line;
         buffer.push_back('\n');
+
         const auto statements = SplitStatements(buffer);
+
         if (statements.empty()) {
             continue;
         }
+
+        const bool command_is_complete = EndsWithSemicolonIgnoringSpaces(buffer);
+
         std::size_t executable_count = statements.size();
-        if (!buffer.empty() && buffer.back() != ';') {
+        if (!command_is_complete) {
             executable_count = statements.size() - 1;
         }
 
         for (std::size_t i = 0; i < executable_count; ++i) {
             const auto &statement = statements[i];
-            const bool has_non_space =
-                statement.find_first_not_of(" \t\r\n") != std::string::npos;
-            if (!has_non_space) {
+
+            if (!HasNonSpace(statement)) {
                 continue;
             }
+
+            int rc = 0;
             if (use_remote) {
-                ExecuteAndPrintRemote(remote_host, remote_port, "cli", jwt_token,
-                                      statement,
-                                      statement_index);
+                rc = ExecuteAndPrintRemote(remote_host, remote_port, "cli",
+                                           jwt_token, statement, statement_index);
             } else {
-                ExecuteAndPrint(engine, session, statement, statement_index);
+                rc = ExecuteAndPrint(engine, session, statement, statement_index);
             }
+
             ++statement_index;
         }
 
-        if (executable_count < statements.size()) {
+        if (command_is_complete) {
+            buffer.clear();
+        } else if (executable_count < statements.size()) {
             buffer = statements.back();
         } else {
             buffer.clear();
