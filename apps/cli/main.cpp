@@ -74,6 +74,16 @@ namespace {
         std::cout << "]\n";
     }
 
+    std::string TrimCopy(std::string text) {
+        const auto begin = text.find_first_not_of(" \t\r\n");
+        if (begin == std::string::npos) {
+            return {};
+        }
+
+        const auto end = text.find_last_not_of(" \t\r\n");
+        return text.substr(begin, end - begin + 1);
+    }
+
     bool HasNonSpace(const std::string &text) {
         return text.find_first_not_of(" \t\r\n") != std::string::npos;
     }
@@ -84,6 +94,41 @@ namespace {
             return false;
         }
         return text[pos] == ';';
+    }
+
+    std::string StripOneTrailingSemicolon(std::string text) {
+        text = TrimCopy(std::move(text));
+        if (!text.empty() && text.back() == ';') {
+            text.pop_back();
+        }
+        return TrimCopy(std::move(text));
+    }
+
+    bool StartsWithKeyword(const std::string &text, const std::string &keyword) {
+        const auto trimmed = TrimCopy(text);
+        if (trimmed.size() < keyword.size()) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < keyword.size(); ++i) {
+            if (std::toupper(static_cast<unsigned char>(trimmed[i])) !=
+                std::toupper(static_cast<unsigned char>(keyword[i]))) {
+                return false;
+                }
+        }
+
+        if (trimmed.size() == keyword.size()) {
+            return true;
+        }
+
+        return std::isspace(static_cast<unsigned char>(trimmed[keyword.size()]));
+    }
+
+    bool IsRemoteMetaCommand(const std::string &text) {
+        return StartsWithKeyword(text, "CLUSTER") ||
+               StartsWithKeyword(text, "AUTH") ||
+               StartsWithKeyword(text, "ASYNC") ||
+               StartsWithKeyword(text, "TELEMETRY");
     }
 
     std::vector<std::string> SplitStatements(const std::string &input) {
@@ -248,16 +293,21 @@ namespace {
             return 0;
         }
 
+        std::string payload = sql;
+        if (IsRemoteMetaCommand(payload)) {
+            payload = StripOneTrailingSemicolon(payload);
+        }
+
         const dbms::network::RequestEnvelope request{
             .client_id = client_id,
             .jwt_token = jwt_token,
-            .payload = sql,
+            .payload = payload,
         };
         const auto response = SendRemote(host, port, request);
         if (!response.has_value()) {
             std::cout << "error[" << statement_index
                       << "]: type=NETWORK_ERROR code=6 message=failed to reach server sql=\""
-                      << dbms::common::EscapeJsonText(sql) << "\"\n";
+                      << dbms::common::EscapeJsonText(payload) << "\"\n";
             return 1;
         }
         std::cout << response->payload << "\n";
@@ -403,12 +453,11 @@ int main(int argc, char **argv) {
                 continue;
             }
 
-            int rc = 0;
             if (use_remote) {
-                rc = ExecuteAndPrintRemote(remote_host, remote_port, "cli",
-                                           jwt_token, statement, statement_index);
+                ExecuteAndPrintRemote(remote_host, remote_port, "cli",
+                                      jwt_token, statement, statement_index);
             } else {
-                rc = ExecuteAndPrint(engine, session, statement, statement_index);
+                ExecuteAndPrint(engine, session, statement, statement_index);
             }
 
             ++statement_index;
